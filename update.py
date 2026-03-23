@@ -55,9 +55,9 @@ def query_access():
     )
     SELECT ROUND(lat,3) AS lat, ROUND(lng,3) AS lng, COUNT(*) AS access_count
     FROM markers_union WHERE lat IS NOT NULL AND lng IS NOT NULL
-    GROUP BY 1,2 ORDER BY access_count DESC LIMIT 5000
+    GROUP BY 1,2 ORDER BY access_count DESC LIMIT 10000
     """
-    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=5000", sql]
+    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=10000", sql]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr}")
@@ -80,9 +80,9 @@ def query_reservation():
       AND reservation_created_lat IS NOT NULL AND reservation_created_lng IS NOT NULL
       AND reservation_created_lat BETWEEN 36.9 AND 38.1
       AND reservation_created_lng BETWEEN 126.3 AND 127.9
-    GROUP BY 1,2 ORDER BY reservation_count DESC LIMIT 5000
+    GROUP BY 1,2 ORDER BY reservation_count DESC LIMIT 10000
     """
-    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=5000", sql]
+    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=10000", sql]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr}")
