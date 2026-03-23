@@ -631,6 +631,7 @@ def compute_growth_analysis(weekly_data, zones_data=None):
     sorted_all_weeks = sorted(w for w in gg_total.keys())
 
     analysis = []
+    decline = []
     for rg, weeks_dict in by_region.items():
         sorted_weeks = sorted(w for w in weeks_dict.keys() if w != current_week and w in gg_total)
         if len(sorted_weeks) < 4:
@@ -669,18 +670,6 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         avg_res = sum(res_vals) / len(res_vals)
         avg_cars = sum(car_vals) / len(car_vals) if car_vals else 0
 
-        # 예약 점유율 상승 추세인 지역만
-        if res_slope <= 0:
-            continue
-
-        # 공급 분류 (공급 점유율 기울기 기준)
-        if car_slope < -0.02:
-            status = '점검 필요'
-        elif car_slope > 0.02:
-            status = '대응 진행 중'
-        else:
-            status = '증차 검토'
-
         # 주평균
         access_weekly = round(avg_access)
         res_weekly = round(avg_res)
@@ -690,7 +679,7 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         res_growth = _half_change(res_vals)
         car_growth = _half_change(car_vals) if car_vals else 0
 
-        analysis.append({
+        row = {
             'region2': rg,
             'access_weekly': access_weekly,
             'res_weekly': res_weekly,
@@ -698,11 +687,29 @@ def compute_growth_analysis(weekly_data, zones_data=None):
             'access_growth': access_growth,
             'res_growth': res_growth,
             'car_growth': car_growth,
-            'status': status,
             'access_trend': access_vals,
             'res_trend': res_vals,
             'car_trend': car_vals,
-        })
+        }
+
+        if res_slope > 0:
+            # 수요 성장: 공급 분류
+            if car_slope < -0.02:
+                row['status'] = '점검 필요'
+            elif car_slope > 0.02:
+                row['status'] = '대응 진행 중'
+            else:
+                row['status'] = '증차 검토'
+            analysis.append(row)
+        else:
+            # 수요 감소: 공급 분류 (반대 방향)
+            if car_slope > 0.02:
+                row['status'] = '점검 필요'
+            elif car_slope < -0.02:
+                row['status'] = '대응 진행 중'
+            else:
+                row['status'] = '감차 검토'
+            decline.append(row)
 
     # 경기도 전체 시계열 (불완전 주차의 0값 제거)
     gg_access_vals = [gg_total[w]['access'] for w in sorted_all_weeks]
@@ -735,13 +742,18 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         'car_trend': gg_car_vals,
     }
 
-    # 점검 필요 > 증차 검토 > 대응 진행 중 순, 같은 그룹 내에선 예약 성장률 높은 순
-    status_order = {'점검 필요': 0, '증차 검토': 1, '대응 진행 중': 2}
-    analysis.sort(key=lambda x: (status_order.get(x['status'], 9), -x['res_growth']))
+    # 성장: 점검 필요 > 증차 검토 > 대응 진행 중 순, 같은 그룹 내에선 예약 성장률 높은 순
+    status_order_growth = {'점검 필요': 0, '증차 검토': 1, '대응 진행 중': 2}
+    analysis.sort(key=lambda x: (status_order_growth.get(x['status'], 9), -x['res_growth']))
+
+    # 감소: 점검 필요 > 감차 검토 > 대응 진행 중 순, 같은 그룹 내에선 예약 감소율 큰 순
+    status_order_decline = {'점검 필요': 0, '감차 검토': 1, '대응 진행 중': 2}
+    decline.sort(key=lambda x: (status_order_decline.get(x['status'], 9), x['res_growth']))
 
     # 경기도 전체를 첫 번째 요소로 삽입
     analysis.insert(0, gg_total_row)
-    return analysis
+    decline.insert(0, gg_total_row)
+    return {'growth': analysis, 'decline': decline}
 
 
 def reverse_geocode(gaps):
@@ -849,6 +861,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .update-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .update-btn.updating { animation: pulse 1.5s infinite; }
 .update-time { font-size: 9px; color: #6b7394; padding: 1px 10px 4px; }
+.analysis-tab { padding: 5px 14px; border-radius: 4px; border: 1px solid #3a3f55; background: #262b3e; color: #8890a4; font-size: 11px; cursor: pointer; transition: all 0.2s; }
+.analysis-tab:hover { background: #3a4060; color: #fff; }
+.analysis-tab.active { background: #3a4060; color: #fff; border-color: #5b6abf; }
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 .legend-row {
     display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px;
@@ -970,7 +985,14 @@ def jd(data):
 def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, timeline_data=None):
     """잠재 수요 지도 HTML 생성"""
     if analysis is None:
-        analysis = []
+        analysis = {}
+    # analysis가 dict(growth/decline)이면 분리, 아니면 하위호환
+    if isinstance(analysis, dict):
+        analysis_growth = analysis.get('growth', [])
+        analysis_decline = analysis.get('decline', [])
+    else:
+        analysis_growth = analysis
+        analysis_decline = []
     if dtod_data is None:
         dtod_data = []
     if profit_data is None:
@@ -1142,8 +1164,12 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 </div>
 
 <div class="gap-panel" id="analysisPanel" style="width:820px;">
-    <h3>공급 분석 — 수요 성장 지역</h3>
-    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;">예약 점유율 상승 추세 지역 (시즈널리티 보정) | 증감 = 후반기 vs 전반기 변화율(%) | 그래프 = 주간 추이</div>
+    <h3>공급 분석</h3>
+    <div style="display:flex;gap:4px;margin-bottom:10px;">
+        <button id="tabGrowth" class="analysis-tab active" onclick="switchAnalysisTab('growth')">수요 성장</button>
+        <button id="tabDecline" class="analysis-tab" onclick="switchAnalysisTab('decline')">수요 감소</button>
+    </div>
+    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;" id="analysisDesc">예약 점유율 상승 추세 지역 | 증감 = 후반기 vs 전반기 변화율(%) | 그래프 = 주간 추이</div>
     <table style="width:100%;border-collapse:collapse;font-size:11px;">
         <thead><tr>
             <th data-col="region2" style="text-align:left;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">지역</th>
@@ -1212,7 +1238,8 @@ var resData = {jd(res_heat)};
 var dtodData = {jd(dtod_dots)};
 var zonesData = {jd(zones_data)};
 var gapsData = {jd(gaps)};
-var analysisData = {jd(analysis)};
+var analysisGrowth = {jd(analysis_growth)};
+var analysisDecline = {jd(analysis_decline)};
 var gcarData = {jd(gcar_zones)};
 var marketShareData = {jd(market_share)};
 var timelineData = {jd(timeline_data)};
@@ -1460,6 +1487,7 @@ document.getElementById('toggleGap').addEventListener('click', function() {{
 
 // 공급 분석 테이블
 var sortCol = 'status', sortAsc = true;
+var analysisTab = 'growth';
 
 function sparkSvg(vals, color) {{
     if (!vals || vals.length < 2) return '';
@@ -1476,12 +1504,26 @@ function sparkSvg(vals, color) {{
         '</svg>';
 }}
 
+function switchAnalysisTab(tab) {{
+    analysisTab = tab;
+    sortCol = 'status'; sortAsc = true;
+    document.getElementById('tabGrowth').classList.toggle('active', tab === 'growth');
+    document.getElementById('tabDecline').classList.toggle('active', tab === 'decline');
+    document.getElementById('analysisDesc').textContent = tab === 'growth'
+        ? '예약 점유율 상승 추세 지역 | 증감 = 후반기 vs 전반기 변화율(%) | 그래프 = 주간 추이'
+        : '예약 점유율 하락 추세 지역 | 증감 = 후반기 vs 전반기 변화율(%) | 그래프 = 주간 추이';
+    renderAnalysis();
+}}
+
 function renderAnalysis() {{
-    var statusOrd = {{'점검 필요':0,'증차 검토':1,'대응 진행 중':2,'-':99}};
-    // 경기도 전체를 항상 첫 행으로, 나머지를 정렬
+    var data = analysisTab === 'growth' ? analysisGrowth : analysisDecline;
+    var statusOrd = analysisTab === 'growth'
+        ? {{'점검 필요':0,'증차 검토':1,'대응 진행 중':2,'-':99}}
+        : {{'점검 필요':0,'감차 검토':1,'대응 진행 중':2,'-':99}};
+    var emptyMsg = analysisTab === 'growth' ? '수요 성장 지역 없음' : '수요 감소 지역 없음';
     var ggRow = null;
     var rest = [];
-    analysisData.forEach(function(d) {{
+    data.forEach(function(d) {{
         if (d.region2 === '경기도 전체') ggRow = d;
         else rest.push(d);
     }});
@@ -1490,14 +1532,14 @@ function renderAnalysis() {{
         if (sortCol === 'status') {{
             var d = (statusOrd[a.status]||9) - (statusOrd[b.status]||9);
             if (d !== 0) return sortAsc ? d : -d;
-            return b.res_growth - a.res_growth;
+            return analysisTab === 'growth' ? b.res_growth - a.res_growth : a.res_growth - b.res_growth;
         }}
         return sortAsc ? a[sortCol] - b[sortCol] : b[sortCol] - a[sortCol];
     }});
     var sorted = ggRow ? [ggRow].concat(rest) : rest;
 
     var html = '';
-    var statusColors = {{'점검 필요':'#e53935','증차 검토':'#ff9800','대응 진행 중':'#43a047'}};
+    var statusColors = {{'점검 필요':'#e53935','증차 검토':'#ff9800','감차 검토':'#ff9800','대응 진행 중':'#43a047'}};
     sorted.forEach(function(d, idx) {{
         var sc = statusColors[d.status] || '#8890a4';
         var isGg = d.region2 === '경기도 전체';
@@ -1507,7 +1549,7 @@ function renderAnalysis() {{
         var resColor = d.res_growth >= 0 ? '#4fc3f7' : '#ef5350';
         var carColor = d.car_growth >= 0 ? '#66bb6a' : '#ef5350';
         html += '<tr style="' + rowStyle + '">' +
-            '<td style="padding:4px 6px;' + borderStyle + ';white-space:nowrap">' + (isGg ? '📊 ' : '') + d.region2.replace(/\\u3000/g,' ') + '</td>' +
+            '<td style="padding:4px 6px;' + borderStyle + ';white-space:nowrap">' + d.region2.replace(/\\u3000/g,' ') + '</td>' +
             '<td style="text-align:right;padding:4px 6px;' + borderStyle + '">' + d.access_weekly.toLocaleString() + '</td>' +
             '<td style="padding:2px 4px;' + borderStyle + '">' + sparkSvg(d.access_trend, accColor) + '</td>' +
             '<td style="text-align:right;padding:4px 6px;' + borderStyle + ';color:' + accColor + ';font-weight:600">' + (d.access_growth >= 0 ? '+' : '') + d.access_growth.toFixed(1) + '%</td>' +
@@ -1521,7 +1563,7 @@ function renderAnalysis() {{
             '<td style="text-align:center;padding:4px 6px;' + borderStyle + '"><span style="background:' + sc + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap;">' + d.status + '</span></td>') +
             '</tr>';
     }});
-    if (sorted.length === 0) html = '<tr><td colspan="11" style="padding:12px;text-align:center;color:#6b7394;">수요 성장 지역 없음</td></tr>';
+    if (sorted.length <= 1) html += '<tr><td colspan="11" style="padding:12px;text-align:center;color:#6b7394;">' + emptyMsg + '</td></tr>';
     document.getElementById('analysisBody').innerHTML = html;
 }}
 document.querySelectorAll('#analysisPanel th').forEach(function(th) {{
@@ -1758,8 +1800,11 @@ def regenerate_from_cache():
         weekly_data = json.load(open(weekly_path))
         analysis = compute_growth_analysis(weekly_data, zones)
     else:
-        analysis = load_cache("supply_demand")  # fallback
-    print(f"  공급 분석: {len(analysis)} 성장 지역")
+        analysis = load_cache("supply_demand") or {}  # fallback
+    if isinstance(analysis, dict):
+        print(f"  공급 분석: {len(analysis.get('growth',[]))} 성장 / {len(analysis.get('decline',[]))} 감소 지역")
+    else:
+        print(f"  공급 분석: {len(analysis)} 지역 (레거시)")
 
     # Gap 분석: 서울+인천 철저 제외 (compute_gaps 내부에서 is_non_gyeonggi 적용)
     gaps = compute_gaps(access, reservation, zones)
@@ -1843,7 +1888,7 @@ def main():
     supply_cnt = len(weekly_data.get('supply', []))
     print(f"       접속 {access_cnt}, 예약 {res_cnt}, 공급 {supply_cnt} rows")
     analysis = compute_growth_analysis(weekly_data, zones)
-    print(f"       공급 분석: {len(analysis)} 성장 지역")
+    print(f"       공급 분석: {len(analysis.get('growth',[]))} 성장 / {len(analysis.get('decline',[]))} 감소 지역")
 
     # Gap 분석: compute_gaps 내부에서 is_non_gyeonggi 적용
     print("  6/6 미충족 수요 분석 + 역지오코딩...")
@@ -1968,7 +2013,7 @@ def update_demand():
     print("  3.5/3 주간 추이 조회...")
     weekly_data = query_weekly_trends()
     analysis = compute_growth_analysis(weekly_data, zones)
-    print(f"       {len(analysis)} 성장 지역")
+    print(f"       {len(analysis.get('growth',[]))} 성장 / {len(analysis.get('decline',[]))} 감소 지역")
 
     # Gap 분석
     gaps = compute_gaps(access, reservation, zones)
