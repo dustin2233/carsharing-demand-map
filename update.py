@@ -1621,11 +1621,6 @@ function doUpdate(endpoint, btn, label) {{
         }});
 }}
 function runUpdateDemand() {{
-    var today = new Date().toISOString().slice(0, 10);
-    if (lastUpdateDemand === today) {{
-        alert('오늘(' + today + ') 이미 수요 업데이트했습니다.\\n내일 다시 시도해주세요.');
-        return;
-    }}
     doUpdate('/api/update-demand', document.getElementById('updateDemandBtn'), '수요 업데이트');
 }}
 function runUpdateZone() {{

@@ -71,16 +71,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         })
 
     def handle_update_demand(self):
-        today = datetime.now().strftime('%Y-%m-%d')
-        last = get_last_update(LAST_UPDATE_DEMAND)
-
-        if last == today:
-            self._send_json(429, {
-                'error': f'오늘({today}) 이미 수요 업데이트했습니다. 내일 다시 시도하세요.',
-                'last_update': last
-            })
-            return
-
         print(f"[{datetime.now()}] 수요 업데이트 시작...")
         try:
             result = subprocess.run(
