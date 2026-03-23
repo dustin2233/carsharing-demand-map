@@ -669,10 +669,20 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         res_weekly = round(avg_res)
         cars_current = car_vals[-1] if car_vals else 0
 
-        # 성장률 = 점유율 기울기 (경기도 평균 대비 주당 변화 %p)
-        access_growth = round(access_slope, 2)
-        res_growth = round(res_slope, 2)
-        car_growth = round(car_slope, 2)
+        # 성장률 = 최근 6주 vs 이전 6주 평균 비교 (% 변화율)
+        def _half_change(vals):
+            if len(vals) < 4:
+                return 0
+            mid = len(vals) // 2
+            first_half = sum(vals[:mid]) / mid
+            second_half = sum(vals[mid:]) / (len(vals) - mid)
+            if first_half == 0:
+                return 0
+            return round((second_half - first_half) / first_half * 100, 1)
+
+        access_growth = _half_change(access_vals)
+        res_growth = _half_change(res_vals)
+        car_growth = _half_change(car_vals) if car_vals else 0
 
         analysis.append({
             'region2': rg,
@@ -1090,7 +1100,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 
 <div class="gap-panel" id="analysisPanel" style="width:620px;">
     <h3>공급 분석 — 수요 성장 지역</h3>
-    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;">경기도 평균 대비 점유율 상승 지역 (시즈널리티 보정) | 증감 = 주당 점유율 변화(%p)</div>
+    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;">예약 점유율 상승 추세 지역 (시즈널리티 보정) | 증감 = 최근 대비 이전 기간 변화율(%)</div>
     <table style="width:100%;border-collapse:collapse;font-size:11px;">
         <thead><tr>
             <th data-col="region2" style="text-align:left;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">지역</th>
@@ -1423,11 +1433,11 @@ function renderAnalysis() {{
         html += '<tr>' +
             '<td style="padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.region2.replace(/\\u3000/g,' ') + '</td>' +
             '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.access_weekly.toLocaleString() + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;color:' + (d.access_growth >= 0 ? '#4fc3f7' : '#ef5350') + ';font-weight:600">' + (d.access_growth >= 0 ? '+' : '') + d.access_growth.toFixed(2) + '</td>' +
+            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;color:' + (d.access_growth >= 0 ? '#4fc3f7' : '#ef5350') + ';font-weight:600">' + (d.access_growth >= 0 ? '+' : '') + d.access_growth.toFixed(1) + '%</td>' +
             '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.res_weekly.toLocaleString() + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;color:#4fc3f7;font-weight:600">+' + d.res_growth.toFixed(2) + '</td>' +
+            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;color:#4fc3f7;font-weight:600">+' + d.res_growth.toFixed(1) + '%</td>' +
             '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.cars + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;color:' + (d.car_growth >= 0 ? '#66bb6a' : '#ef5350') + '">' + (d.car_growth >= 0 ? '+' : '') + d.car_growth.toFixed(2) + '</td>' +
+            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;color:' + (d.car_growth >= 0 ? '#66bb6a' : '#ef5350') + '">' + (d.car_growth >= 0 ? '+' : '') + d.car_growth.toFixed(1) + '%</td>' +
             '<td style="text-align:center;padding:4px 6px;border-bottom:1px solid #2a2f45"><span style="background:' + sc + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap;">' + d.status + '</span></td>' +
             '</tr>';
     }});
