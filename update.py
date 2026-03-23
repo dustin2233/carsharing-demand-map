@@ -1107,10 +1107,11 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         <div class="stat-card gcar"><span class="label">그린카 차량</span><span class="value">{total_gcar_cars:,}</span></div>
     </div>
     <div class="sidebar-section">
-        <div class="sidebar-section-title">지역 필터</div>
-        <select id="regionSelect">
-            <option value="">전체 지역</option>
-        </select>
+        <div class="sidebar-section-title">지역 검색</div>
+        <div style="position:relative;">
+            <input type="text" id="regionSearch" placeholder="지역명 또는 존 이름 검색" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid #3a3f55;background:#262b3e;color:#c0c8e0;font-size:11px;box-sizing:border-box;">
+            <div id="searchResults" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:200px;overflow-y:auto;background:#262b3e;border:1px solid #3a3f55;border-top:none;border-radius:0 0 6px 6px;z-index:9999;"></div>
+        </div>
     </div>
     <div class="sidebar-section">
         <div class="sidebar-section-title">데이터 레이어</div>
@@ -1240,12 +1241,87 @@ fetch('/api/status').then(function(r){{return r.json();}}).then(function(d){{
     document.getElementById('zoneUpdateTime').textContent = '마지막: ' + lastUpdateZone;
 }}).catch(function(){{}});
 
-var sel = document.getElementById('regionSelect');
-regions.forEach(function(r) {{
-    var o = document.createElement('option');
-    o.value = r; o.textContent = r.replace(/\\u3000/g, ' ');
-    sel.appendChild(o);
+// 검색 기능
+var searchInput = document.getElementById('regionSearch');
+var searchResults = document.getElementById('searchResults');
+var searchItemStyle = 'padding:6px 10px;cursor:pointer;font-size:11px;color:#c0c8e0;border-bottom:1px solid #2a2f45;';
+
+function doSearch(query) {{
+    searchResults.innerHTML = '';
+    if (!query || query.length < 1) {{ searchResults.style.display = 'none'; return; }}
+    var q = query.toLowerCase();
+    var matches = [];
+    // 지역(region2) 매칭
+    regions.forEach(function(r) {{
+        if (r.replace(/\\u3000/g, ' ').toLowerCase().indexOf(q) >= 0) {{
+            matches.push({{ type: 'region', label: r.replace(/\\u3000/g, ' '), value: r }});
+        }}
+    }});
+    // 존 이름 매칭
+    zonesData.forEach(function(z) {{
+        if (z.zone_name.toLowerCase().indexOf(q) >= 0 || z.parking_name.toLowerCase().indexOf(q) >= 0) {{
+            matches.push({{ type: 'zone', label: z.zone_name + ' (' + z.region2.replace(/\\u3000/g, ' ') + ')', value: z }});
+        }}
+    }});
+    if (matches.length === 0) {{
+        searchResults.innerHTML = '<div style="' + searchItemStyle + 'color:#6b7394;">결과 없음</div>';
+        searchResults.style.display = 'block';
+        return;
+    }}
+    matches.slice(0, 20).forEach(function(m) {{
+        var div = document.createElement('div');
+        div.style.cssText = searchItemStyle;
+        div.textContent = (m.type === 'region' ? '📍 ' : '🅿️ ') + m.label;
+        div.addEventListener('mouseenter', function() {{ this.style.background = '#3a4060'; }});
+        div.addEventListener('mouseleave', function() {{ this.style.background = 'transparent'; }});
+        div.addEventListener('click', function() {{
+            searchResults.style.display = 'none';
+            if (m.type === 'region') {{
+                filterByRegion(m.value);
+                searchInput.value = m.label;
+            }} else {{
+                filterByRegion('');
+                searchInput.value = m.label;
+                map.setView([m.value.lat, m.value.lng], 16);
+                allZoneMarkers.forEach(function(mk) {{
+                    if (mk._zoneData.zone_id === m.value.zone_id) mk.openPopup();
+                }});
+            }}
+        }});
+        searchResults.appendChild(div);
+    }});
+    searchResults.style.display = 'block';
+}}
+searchInput.addEventListener('input', function() {{ doSearch(this.value); }});
+searchInput.addEventListener('focus', function() {{ if (this.value) doSearch(this.value); }});
+document.addEventListener('click', function(e) {{
+    if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) searchResults.style.display = 'none';
 }});
+// 전체 보기 복원: 입력 비우면 리셋
+searchInput.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape') {{ this.value = ''; searchResults.style.display = 'none'; filterByRegion(''); }}
+}});
+
+function filterByRegion(region) {{
+    zoneLayer.clearLayers();
+    allZoneMarkers.forEach(function(m) {{
+        if (!region || m._zoneData.region2 === region) zoneLayer.addLayer(m);
+    }});
+    if (region) {{
+        var rz = zonesData.filter(function(z) {{ return z.region2 === region; }});
+        if (rz.length > 0) {{
+            var lats = rz.map(function(z) {{ return z.lat; }});
+            var lngs = rz.map(function(z) {{ return z.lng; }});
+            var pad = 0.03;
+            map.fitBounds([
+                [Math.min.apply(null, lats) - pad, Math.min.apply(null, lngs) - pad],
+                [Math.max.apply(null, lats) + pad, Math.max.apply(null, lngs) + pad]
+            ]);
+        }}
+    }} else {{
+        map.setView([37.41, 127.0], 9);
+    }}
+}}
 
 var map = L.map('map', {{ zoomControl: true }}).setView([37.41, 127.0], 9);
 {TILE_SETUP}
@@ -1720,27 +1796,7 @@ function showTimeline(zoneId, zoneName) {{
     panel.style.display = 'block';
 }}
 
-sel.addEventListener('change', function() {{
-    var region = this.value;
-    zoneLayer.clearLayers();
-    allZoneMarkers.forEach(function(m) {{
-        if (!region || m._zoneData.region2 === region) zoneLayer.addLayer(m);
-    }});
-    if (region) {{
-        var rz = zonesData.filter(function(z) {{ return z.region2 === region; }});
-        if (rz.length > 0) {{
-            var lats = rz.map(function(z) {{ return z.lat; }});
-            var lngs = rz.map(function(z) {{ return z.lng; }});
-            var pad = 0.03;
-            map.fitBounds([
-                [Math.min.apply(null, lats) - pad, Math.min.apply(null, lngs) - pad],
-                [Math.max.apply(null, lats) + pad, Math.max.apply(null, lngs) + pad]
-            ]);
-        }}
-    }} else {{
-        map.setView([37.41, 127.0], 9);
-    }}
-}});
+// (검색 기능으로 대체됨)
 </script>
 </body>
 </html>"""
