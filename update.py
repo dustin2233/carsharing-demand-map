@@ -659,6 +659,11 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         access_vals = [weeks_dict[w]['access'] for w in sorted_weeks]
         res_vals = [weeks_dict[w]['res'] for w in sorted_weeks]
         car_vals = [weeks_dict[w]['cars'] for w in sorted_weeks]
+        # 양 끝 불완전 주차 0값 트림
+        while access_vals and access_vals[-1] == 0:
+            access_vals.pop(); res_vals.pop() if res_vals else None; car_vals.pop() if car_vals else None
+        while access_vals and access_vals[0] == 0:
+            access_vals.pop(0); res_vals.pop(0) if res_vals else None; car_vals.pop(0) if car_vals else None
 
         avg_access = sum(access_vals) / len(access_vals)
         avg_res = sum(res_vals) / len(res_vals)
@@ -699,10 +704,19 @@ def compute_growth_analysis(weekly_data, zones_data=None):
             'car_trend': car_vals,
         })
 
-    # 경기도 전체 시계열
+    # 경기도 전체 시계열 (불완전 주차의 0값 제거)
     gg_access_vals = [gg_total[w]['access'] for w in sorted_all_weeks]
     gg_res_vals = [gg_total[w]['res'] for w in sorted_all_weeks]
     gg_car_vals = [gg_total[w]['cars'] for w in sorted_all_weeks]
+    # 양 끝의 0 값 트림
+    while gg_access_vals and gg_access_vals[-1] == 0:
+        gg_access_vals.pop()
+        if gg_res_vals: gg_res_vals.pop()
+        if gg_car_vals: gg_car_vals.pop()
+    while gg_access_vals and gg_access_vals[0] == 0:
+        gg_access_vals.pop(0)
+        if gg_res_vals: gg_res_vals.pop(0)
+        if gg_car_vals: gg_car_vals.pop(0)
     gg_avg_access = sum(gg_access_vals) / len(gg_access_vals) if gg_access_vals else 0
     gg_avg_res = sum(gg_res_vals) / len(gg_res_vals) if gg_res_vals else 0
     gg_cars_current = gg_car_vals[-1] if gg_car_vals else 0
