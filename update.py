@@ -1163,6 +1163,15 @@ var timelineData = {jd(timeline_data)};
 var regions = {jd(regions)};
 var lastUpdateDemand = '{LAST_UPDATE_DEMAND}';
 var lastUpdateZone = '{LAST_UPDATE_ZONE}';
+document.getElementById('demandUpdateTime').textContent = '마지막: ' + lastUpdateDemand;
+document.getElementById('zoneUpdateTime').textContent = '마지막: ' + lastUpdateZone;
+// 로컬 서버 실행 시 최신 값으로 갱신
+fetch('/api/status').then(function(r){{return r.json();}}).then(function(d){{
+    lastUpdateDemand = d.last_update_demand || lastUpdateDemand;
+    lastUpdateZone = d.last_update_zone || lastUpdateZone;
+    document.getElementById('demandUpdateTime').textContent = '마지막: ' + lastUpdateDemand;
+    document.getElementById('zoneUpdateTime').textContent = '마지막: ' + lastUpdateZone;
+}}).catch(function(){{}});
 
 var sel = document.getElementById('regionSelect');
 regions.forEach(function(r) {{
