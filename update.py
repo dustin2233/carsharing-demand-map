@@ -543,18 +543,6 @@ def _assign_access_to_region(access_rows, zones_data):
     return result
 
 
-def _linear_slope(values):
-    """단순 선형회귀 기울기 (값 리스트 → 주당 변화량)"""
-    n = len(values)
-    if n < 3:
-        return 0
-    x_mean = (n - 1) / 2
-    y_mean = sum(values) / n
-    num = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(values))
-    den = sum((i - x_mean) ** 2 for i in range(n))
-    return num / den if den > 0 else 0
-
-
 def _half_change(vals):
     """최근 절반 vs 이전 절반 평균 비교 (% 변화율)"""
     if len(vals) < 4:
@@ -652,11 +640,6 @@ def compute_growth_analysis(weekly_data, zones_data=None):
             if gt['cars'] > 0:
                 car_share.append(rv['cars'] / gt['cars'] * 100)
 
-        # 점유율의 기울기 (시즈널리티 제거된 상대적 성장)
-        access_slope = _linear_slope(access_share) if len(access_share) >= 4 else 0
-        res_slope = _linear_slope(res_share) if len(res_share) >= 4 else 0
-        car_slope = _linear_slope(car_share) if len(car_share) >= 4 else 0
-
         access_vals = [weeks_dict[w]['access'] for w in sorted_weeks]
         res_vals = [weeks_dict[w]['res'] for w in sorted_weeks]
         car_vals = [weeks_dict[w]['cars'] for w in sorted_weeks]
@@ -693,20 +676,20 @@ def compute_growth_analysis(weekly_data, zones_data=None):
             'car_trend': [round(v, 3) for v in car_share],
         }
 
-        if res_slope > 0:
+        if res_growth > 0:
             # 수요 성장: 공급 분류
-            if car_slope < -0.02:
+            if car_growth < -1:
                 row['status'] = '점검 필요'
-            elif car_slope > 0.02:
+            elif car_growth > 1:
                 row['status'] = '대응 진행 중'
             else:
                 row['status'] = '증차 검토'
             analysis.append(row)
         else:
             # 수요 감소: 공급 분류 (반대 방향)
-            if car_slope > 0.02:
+            if car_growth > 1:
                 row['status'] = '점검 필요'
-            elif car_slope < -0.02:
+            elif car_growth < -1:
                 row['status'] = '대응 진행 중'
             else:
                 row['status'] = '감차 검토'
