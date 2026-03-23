@@ -555,6 +555,18 @@ def _linear_slope(values):
     return num / den if den > 0 else 0
 
 
+def _half_change(vals):
+    """최근 절반 vs 이전 절반 평균 비교 (% 변화율)"""
+    if len(vals) < 4:
+        return 0
+    mid = len(vals) // 2
+    first_half = sum(vals[:mid]) / mid
+    second_half = sum(vals[mid:]) / (len(vals) - mid)
+    if first_half == 0:
+        return 0
+    return round((second_half - first_half) / first_half * 100, 1)
+
+
 def compute_growth_analysis(weekly_data, zones_data=None):
     """주간 추이 데이터로 성장 지역 분석 + 공급 분류"""
     # 접속 데이터 → region2 매핑
@@ -669,17 +681,6 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         res_weekly = round(avg_res)
         cars_current = car_vals[-1] if car_vals else 0
 
-        # 성장률 = 최근 6주 vs 이전 6주 평균 비교 (% 변화율)
-        def _half_change(vals):
-            if len(vals) < 4:
-                return 0
-            mid = len(vals) // 2
-            first_half = sum(vals[:mid]) / mid
-            second_half = sum(vals[mid:]) / (len(vals) - mid)
-            if first_half == 0:
-                return 0
-            return round((second_half - first_half) / first_half * 100, 1)
-
         access_growth = _half_change(access_vals)
         res_growth = _half_change(res_vals)
         car_growth = _half_change(car_vals) if car_vals else 0
@@ -693,11 +694,39 @@ def compute_growth_analysis(weekly_data, zones_data=None):
             'res_growth': res_growth,
             'car_growth': car_growth,
             'status': status,
+            'access_trend': access_vals,
+            'res_trend': res_vals,
+            'car_trend': car_vals,
         })
+
+    # 경기도 전체 시계열
+    gg_access_vals = [gg_total[w]['access'] for w in sorted_all_weeks]
+    gg_res_vals = [gg_total[w]['res'] for w in sorted_all_weeks]
+    gg_car_vals = [gg_total[w]['cars'] for w in sorted_all_weeks]
+    gg_avg_access = sum(gg_access_vals) / len(gg_access_vals) if gg_access_vals else 0
+    gg_avg_res = sum(gg_res_vals) / len(gg_res_vals) if gg_res_vals else 0
+    gg_cars_current = gg_car_vals[-1] if gg_car_vals else 0
+
+    gg_total_row = {
+        'region2': '경기도 전체',
+        'access_weekly': round(gg_avg_access),
+        'res_weekly': round(gg_avg_res),
+        'cars': gg_cars_current,
+        'access_growth': _half_change(gg_access_vals),
+        'res_growth': _half_change(gg_res_vals),
+        'car_growth': _half_change(gg_car_vals) if gg_car_vals else 0,
+        'status': '-',
+        'access_trend': gg_access_vals,
+        'res_trend': gg_res_vals,
+        'car_trend': gg_car_vals,
+    }
 
     # 점검 필요 > 증차 검토 > 대응 진행 중 순, 같은 그룹 내에선 예약 성장률 높은 순
     status_order = {'점검 필요': 0, '증차 검토': 1, '대응 진행 중': 2}
     analysis.sort(key=lambda x: (status_order.get(x['status'], 9), -x['res_growth']))
+
+    # 경기도 전체를 첫 번째 요소로 삽입
+    analysis.insert(0, gg_total_row)
     return analysis
 
 
@@ -1098,18 +1127,21 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
     <div id="gapList"></div>
 </div>
 
-<div class="gap-panel" id="analysisPanel" style="width:620px;">
+<div class="gap-panel" id="analysisPanel" style="width:820px;">
     <h3>공급 분석 — 수요 성장 지역</h3>
-    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;">예약 점유율 상승 추세 지역 (시즈널리티 보정) | 증감 = 최근 대비 이전 기간 변화율(%)</div>
+    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;">예약 점유율 상승 추세 지역 (시즈널리티 보정) | 증감 = 후반기 vs 전반기 변화율(%) | 그래프 = 주간 추이</div>
     <table style="width:100%;border-collapse:collapse;font-size:11px;">
         <thead><tr>
             <th data-col="region2" style="text-align:left;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">지역</th>
             <th data-col="access_weekly" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">접속/주</th>
-            <th data-col="access_growth" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">접속↑</th>
+            <th style="padding:4px 6px;border-bottom:2px solid #3a3f55;color:#8890a4;">추이</th>
+            <th data-col="access_growth" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">증감</th>
             <th data-col="res_weekly" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">예약/주</th>
-            <th data-col="res_growth" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">예약↑</th>
+            <th style="padding:4px 6px;border-bottom:2px solid #3a3f55;color:#8890a4;">추이</th>
+            <th data-col="res_growth" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">증감</th>
             <th data-col="cars" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">차량</th>
-            <th data-col="car_growth" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">공급↑</th>
+            <th style="padding:4px 6px;border-bottom:2px solid #3a3f55;color:#8890a4;">추이</th>
+            <th data-col="car_growth" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">증감</th>
             <th data-col="status" style="text-align:center;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">판정</th>
         </tr></thead>
         <tbody id="analysisBody"></tbody>
@@ -1415,9 +1447,31 @@ document.getElementById('toggleGap').addEventListener('click', function() {{
 // 공급 분석 테이블
 var sortCol = 'status', sortAsc = true;
 
+function sparkSvg(vals, color) {{
+    if (!vals || vals.length < 2) return '';
+    var w = 60, h = 18, pad = 1;
+    var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+    var range = mx - mn || 1;
+    var pts = vals.map(function(v, i) {{
+        var x = pad + i * ((w - 2 * pad) / (vals.length - 1));
+        var y = h - pad - (v - mn) / range * (h - 2 * pad);
+        return x.toFixed(1) + ',' + y.toFixed(1);
+    }});
+    return '<svg width="' + w + '" height="' + h + '" style="vertical-align:middle">' +
+        '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round"/>' +
+        '</svg>';
+}}
+
 function renderAnalysis() {{
-    var statusOrd = {{'점검 필요':0,'증차 검토':1,'대응 진행 중':2}};
-    var sorted = analysisData.slice().sort(function(a, b) {{
+    var statusOrd = {{'점검 필요':0,'증차 검토':1,'대응 진행 중':2,'-':99}};
+    // 경기도 전체를 항상 첫 행으로, 나머지를 정렬
+    var ggRow = null;
+    var rest = [];
+    analysisData.forEach(function(d) {{
+        if (d.region2 === '경기도 전체') ggRow = d;
+        else rest.push(d);
+    }});
+    rest.sort(function(a, b) {{
         if (sortCol === 'region2') return sortAsc ? a.region2.localeCompare(b.region2) : b.region2.localeCompare(a.region2);
         if (sortCol === 'status') {{
             var d = (statusOrd[a.status]||9) - (statusOrd[b.status]||9);
@@ -1426,22 +1480,34 @@ function renderAnalysis() {{
         }}
         return sortAsc ? a[sortCol] - b[sortCol] : b[sortCol] - a[sortCol];
     }});
+    var sorted = ggRow ? [ggRow].concat(rest) : rest;
+
     var html = '';
     var statusColors = {{'점검 필요':'#e53935','증차 검토':'#ff9800','대응 진행 중':'#43a047'}};
-    sorted.forEach(function(d) {{
+    sorted.forEach(function(d, idx) {{
         var sc = statusColors[d.status] || '#8890a4';
-        html += '<tr>' +
-            '<td style="padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.region2.replace(/\\u3000/g,' ') + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.access_weekly.toLocaleString() + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;color:' + (d.access_growth >= 0 ? '#4fc3f7' : '#ef5350') + ';font-weight:600">' + (d.access_growth >= 0 ? '+' : '') + d.access_growth.toFixed(1) + '%</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.res_weekly.toLocaleString() + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;color:#4fc3f7;font-weight:600">+' + d.res_growth.toFixed(1) + '%</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.cars + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;color:' + (d.car_growth >= 0 ? '#66bb6a' : '#ef5350') + '">' + (d.car_growth >= 0 ? '+' : '') + d.car_growth.toFixed(1) + '%</td>' +
-            '<td style="text-align:center;padding:4px 6px;border-bottom:1px solid #2a2f45"><span style="background:' + sc + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap;">' + d.status + '</span></td>' +
+        var isGg = d.region2 === '경기도 전체';
+        var rowStyle = isGg ? 'background:#1a1f33;font-weight:600;' : '';
+        var borderStyle = isGg ? 'border-bottom:2px solid #3a3f55' : 'border-bottom:1px solid #2a2f45';
+        var accColor = d.access_growth >= 0 ? '#4fc3f7' : '#ef5350';
+        var resColor = d.res_growth >= 0 ? '#4fc3f7' : '#ef5350';
+        var carColor = d.car_growth >= 0 ? '#66bb6a' : '#ef5350';
+        html += '<tr style="' + rowStyle + '">' +
+            '<td style="padding:4px 6px;' + borderStyle + ';white-space:nowrap">' + (isGg ? '📊 ' : '') + d.region2.replace(/\\u3000/g,' ') + '</td>' +
+            '<td style="text-align:right;padding:4px 6px;' + borderStyle + '">' + d.access_weekly.toLocaleString() + '</td>' +
+            '<td style="padding:2px 4px;' + borderStyle + '">' + sparkSvg(d.access_trend, accColor) + '</td>' +
+            '<td style="text-align:right;padding:4px 6px;' + borderStyle + ';color:' + accColor + ';font-weight:600">' + (d.access_growth >= 0 ? '+' : '') + d.access_growth.toFixed(1) + '%</td>' +
+            '<td style="text-align:right;padding:4px 6px;' + borderStyle + '">' + d.res_weekly.toLocaleString() + '</td>' +
+            '<td style="padding:2px 4px;' + borderStyle + '">' + sparkSvg(d.res_trend, resColor) + '</td>' +
+            '<td style="text-align:right;padding:4px 6px;' + borderStyle + ';color:' + resColor + ';font-weight:600">' + (d.res_growth >= 0 ? '+' : '') + d.res_growth.toFixed(1) + '%</td>' +
+            '<td style="text-align:right;padding:4px 6px;' + borderStyle + '">' + d.cars + '</td>' +
+            '<td style="padding:2px 4px;' + borderStyle + '">' + sparkSvg(d.car_trend, carColor) + '</td>' +
+            '<td style="text-align:right;padding:4px 6px;' + borderStyle + ';color:' + carColor + '">' + (d.car_growth >= 0 ? '+' : '') + d.car_growth.toFixed(1) + '%</td>' +
+            (isGg ? '<td style="text-align:center;padding:4px 6px;' + borderStyle + ';color:#6b7394">기준선</td>' :
+            '<td style="text-align:center;padding:4px 6px;' + borderStyle + '"><span style="background:' + sc + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap;">' + d.status + '</span></td>') +
             '</tr>';
     }});
-    if (sorted.length === 0) html = '<tr><td colspan="8" style="padding:12px;text-align:center;color:#6b7394;">수요 성장 지역 없음</td></tr>';
+    if (sorted.length === 0) html = '<tr><td colspan="11" style="padding:12px;text-align:center;color:#6b7394;">수요 성장 지역 없음</td></tr>';
     document.getElementById('analysisBody').innerHTML = html;
 }}
 document.querySelectorAll('#analysisPanel th').forEach(function(th) {{
