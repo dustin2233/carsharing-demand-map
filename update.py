@@ -675,9 +675,10 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         res_weekly = round(avg_res)
         cars_current = car_vals[-1] if car_vals else 0
 
-        access_growth = _half_change(access_vals)
-        res_growth = _half_change(res_vals)
-        car_growth = _half_change(car_vals) if car_vals else 0
+        # 증감 = 경기도 대비 점유율의 후반기 vs 전반기 변화율
+        access_growth = _half_change(access_share)
+        res_growth = _half_change(res_share)
+        car_growth = _half_change(car_share) if car_share else 0
 
         row = {
             'region2': rg,
@@ -687,9 +688,9 @@ def compute_growth_analysis(weekly_data, zones_data=None):
             'access_growth': access_growth,
             'res_growth': res_growth,
             'car_growth': car_growth,
-            'access_trend': access_vals,
-            'res_trend': res_vals,
-            'car_trend': car_vals,
+            'access_trend': [round(v, 3) for v in access_share],
+            'res_trend': [round(v, 3) for v in res_share],
+            'car_trend': [round(v, 3) for v in car_share],
         }
 
         if res_slope > 0:
@@ -737,7 +738,7 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         'res_growth': _half_change(gg_res_vals),
         'car_growth': _half_change(gg_car_vals) if gg_car_vals else 0,
         'status': '-',
-        'access_trend': gg_access_vals,
+        'access_trend': gg_access_vals,  # 경기도 전체는 절대값 트렌드
         'res_trend': gg_res_vals,
         'car_trend': gg_car_vals,
     }
@@ -1169,7 +1170,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         <button id="tabGrowth" class="analysis-tab active" onclick="switchAnalysisTab('growth')">수요 성장</button>
         <button id="tabDecline" class="analysis-tab" onclick="switchAnalysisTab('decline')">수요 감소</button>
     </div>
-    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;" id="analysisDesc">예약 점유율 상승 추세 지역 | 증감 = 후반기 vs 전반기 변화율(%) | 그래프 = 주간 추이</div>
+    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;" id="analysisDesc">예약 점유율 상승 추세 지역 | 증감·그래프 = 경기도 대비 점유율 변화 (경기도 전체 행은 절대값)</div>
     <table style="width:100%;border-collapse:collapse;font-size:11px;">
         <thead><tr>
             <th data-col="region2" style="text-align:left;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">지역</th>
@@ -1510,8 +1511,8 @@ function switchAnalysisTab(tab) {{
     document.getElementById('tabGrowth').classList.toggle('active', tab === 'growth');
     document.getElementById('tabDecline').classList.toggle('active', tab === 'decline');
     document.getElementById('analysisDesc').textContent = tab === 'growth'
-        ? '예약 점유율 상승 추세 지역 | 증감 = 후반기 vs 전반기 변화율(%) | 그래프 = 주간 추이'
-        : '예약 점유율 하락 추세 지역 | 증감 = 후반기 vs 전반기 변화율(%) | 그래프 = 주간 추이';
+        ? '예약 점유율 상승 추세 지역 | 증감·그래프 = 경기도 대비 점유율 변화 (경기도 전체 행은 절대값)'
+        : '예약 점유율 하락 추세 지역 | 증감·그래프 = 경기도 대비 점유율 변화 (경기도 전체 행은 절대값)';
     renderAnalysis();
 }}
 
