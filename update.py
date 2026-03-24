@@ -212,7 +212,7 @@ def simulate_zone(lat, lng, radius_km=1.0):
     SELECT cz.region2, cz.region3,
            COUNT(*) AS res_cnt,
            COUNT(DISTINCT c.id) AS car_cnt,
-           AVG(TIMESTAMP_DIFF(r.end_at, r.start_at, MINUTE) / 60.0) AS avg_hours_per_res
+           AVG(TIMESTAMP_DIFF(r.end_at_kst, r.start_at_kst, MINUTE) / 60.0) AS avg_hours_per_res
     FROM `socar-data.soda_store.reservation_v2` r
     JOIN `socar-data.tianjin_replica.car_info` c ON r.car_id = c.id
     JOIN `socar-data.tianjin_replica.carzone_info` cz ON c.zone_id = cz.id
