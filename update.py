@@ -350,7 +350,7 @@ def simulate_zone(lat, lng, radius_km=1.0):
         cars_needed = est_weekly_res * avg_hours_per_res / (168 * target_util)
     else:
         cars_needed = est_weekly_res / 3 if est_weekly_res >= 3 else (1 if est_weekly_res >= 1 else 0)
-    raw_recommended_cars = max(0, round(cars_needed))
+    raw_recommended_cars = max(0, math.floor(cars_needed))
 
     # 카니발리제이션 보정: 반경 1km 내 기존 공급 차량 (거리 가중)
     cannibal_cars = 0.0
@@ -366,7 +366,7 @@ def simulate_zone(lat, lng, radius_km=1.0):
             nearby_zone_count += 1
 
     cannibal_cars = round(cannibal_cars, 1)
-    recommended_cars = max(0, round(raw_recommended_cars - cannibal_cars))
+    recommended_cars = max(0, math.floor(raw_recommended_cars - cannibal_cars))
 
     is_recommend = recommended_cars >= 1 and est_rev_per_car >= 1000000
 
@@ -1442,19 +1442,19 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 .sim-panel {{
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 2000;
     background: #1e2233; border: 1px solid #3a3f55; border-radius: 12px;
-    padding: 24px 28px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); width: 740px;
+    padding: 24px 28px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); width: 800px; max-height: 90vh; overflow-y: auto;
     display: none; color: #e0e0e0; font-size: 12px;
 }}
 .sim-body {{ display: flex; gap: 24px; }}
 .sim-left {{ flex: 1; min-width: 0; }}
 .sim-right {{
-    width: 280px; flex-shrink: 0; background: #262b3e; border-radius: 8px; padding: 14px 16px;
-    font-size: 10px; color: #8890a4; line-height: 1.65; max-height: 420px; overflow-y: auto;
+    width: 320px; flex-shrink: 0; background: #262b3e; border-radius: 8px; padding: 16px 18px;
+    font-size: 12px; color: #8890a4; line-height: 1.7;
 }}
-.sim-right h4 {{ font-size: 11px; font-weight: 700; color: #c0c8e0; margin-bottom: 8px; }}
-.sim-right .cr-section {{ margin-bottom: 10px; }}
-.sim-right .cr-title {{ font-size: 10px; font-weight: 700; color: #6b7394; margin-bottom: 4px; }}
-.sim-right code {{ background: #1e2233; padding: 1px 4px; border-radius: 3px; font-size: 9px; color: #42a5f5; }}
+.sim-right h4 {{ font-size: 13px; font-weight: 700; color: #c0c8e0; margin-bottom: 10px; }}
+.sim-right .cr-section {{ margin-bottom: 12px; }}
+.sim-right .cr-title {{ font-size: 12px; font-weight: 700; color: #6b7394; margin-bottom: 4px; }}
+.sim-right code {{ background: #1e2233; padding: 1px 5px; border-radius: 3px; font-size: 11px; color: #42a5f5; }}
 .sim-panel h3 {{ font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #3a3f55; }}
 .sim-row {{ display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }}
 .sim-row .sim-label {{ color: #8890a4; font-size: 11px; }}
