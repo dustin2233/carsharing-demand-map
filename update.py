@@ -346,9 +346,17 @@ def simulate_zone(lat, lng, radius_km=1.0):
     est_gp_per_car = round(w_gp / w_total) if w_total > 0 else 0
     avg_util = w_util / w_total if w_total > 0 else 40
 
+    # 목표 가동률: 대당매출 160만원 이상 존들의 평균 가동률
+    high_perf_utils = []
+    for zid, p in profit_data.items():
+        if p.get('revenue_per_car_28d', 0) >= 1600000 and p.get('utilization_rate', 0) > 0:
+            high_perf_utils.append(p['utilization_rate'])
+    target_util_pct = sum(high_perf_utils) / len(high_perf_utils) if high_perf_utils else 50.0
+    target_util_zone_count = len(high_perf_utils)
+
     # 추천 공급대수 (카니발리제이션 보정 전)
     avg_hours_per_res = 8
-    target_util = min(avg_util / 100, 0.7)
+    target_util = min(target_util_pct / 100, 0.7)
     if target_util > 0:
         cars_needed = est_weekly_res * avg_hours_per_res / (168 * target_util)
     else:
@@ -390,6 +398,8 @@ def simulate_zone(lat, lng, radius_km=1.0):
         'est_rev_per_car': est_rev_per_car,
         'est_gp_per_car': est_gp_per_car,
         'avg_util': round(avg_util, 1),
+        'target_util': round(target_util_pct, 1),
+        'target_util_zone_count': target_util_zone_count,
         'raw_recommended_cars': raw_recommended_cars,
         'cannibal_cars': cannibal_cars,
         'nearby_total_cars': nearby_total_cars,
@@ -2304,6 +2314,7 @@ function showTimeline(zoneId, zoneName) {{
 
         left += '<div class="sim-section"><div class="sim-section-title">카니발리제이션 보정</div>';
         left += '<div class="sim-row"><span class="sim-label">반경 1km 기존 존</span><span class="sim-value">' + d.nearby_zone_count + '개 / ' + d.nearby_total_cars + '대</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">목표 가동률</span><span class="sim-value">' + d.target_util + '% <span style="font-size:9px;font-weight:400;color:#6b7394;">(160만원↑ ' + d.target_util_zone_count + '개존 평균)</span></span></div>';
         left += '<div class="sim-row"><span class="sim-label">수요 기반 적정대수</span><span class="sim-value">' + d.raw_recommended_cars + '대</span></div>';
         left += '<div class="sim-row"><span class="sim-label">카니발 차감</span><span class="sim-value" style="color:#e74c3c">-' + d.cannibal_cars + '대</span></div>';
         left += '</div>';
@@ -2343,7 +2354,8 @@ function showTimeline(zoneId, zoneName) {{
         right += '<code>반경 3km</code> 내 운영 존들의 대당매출·GP·가동률을 거리 역수 가중평균으로 산출</div>';
 
         right += '<div class="cr-section"><div class="cr-title">5. 수요 기반 적정대수</div>';
-        right += '<code>예상 주간 예약 × 8h</code> (건당 평균) ÷ <code>168h × 목표 가동률</code><br>목표 가동률 = min(인근 평균, 70%)</div>';
+        right += '<code>예상 주간 예약 × 8h</code> (건당 평균) ÷ <code>168h × 목표 가동률</code><br>';
+        right += '목표 가동률 = 경기도 내 대당매출 <code>160만원↑</code> 존들의 평균 가동률 (최대 70%)</div>';
 
         right += '<div class="cr-section"><div class="cr-title">6. 카니발리제이션 보정</div>';
         right += '<code>반경 1km</code> 내 기존 존 차량을 거리 가중 차감.<br>';
