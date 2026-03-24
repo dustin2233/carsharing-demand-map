@@ -2187,9 +2187,8 @@ function showTimeline(zoneId, zoneName) {{
         e.originalEvent.preventDefault();
         simLat = e.latlng.lat;
         simLng = e.latlng.lng;
-        var pt = map.latLngToContainerPoint(e.latlng);
-        simCtx.style.left = pt.x + 'px';
-        simCtx.style.top = pt.y + 'px';
+        simCtx.style.left = e.originalEvent.pageX + 'px';
+        simCtx.style.top = e.originalEvent.pageY + 'px';
         simCtx.style.display = 'block';
     }});
 
