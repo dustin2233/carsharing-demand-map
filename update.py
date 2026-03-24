@@ -2226,9 +2226,9 @@ function showTimeline(zoneId, zoneName) {{
         simPanel.style.display = 'block';
         simOverlay.style.display = 'block';
 
-        // 서버 API 호출 (로컬이면 상대경로, 외부면 ngrok URL)
-        var simApiBase = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-            ? '' : '{ngrok_url}';
+        // 서버 API 호출 (로컬 or ngrok이면 상대경로, GitHub Pages면 ngrok URL)
+        var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('.ngrok-free.dev'));
+        var simApiBase = isLocal ? '' : '{ngrok_url}';
         fetch(simApiBase + '/api/simulate', {{
             method: 'POST',
             headers: {{ 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' }},
