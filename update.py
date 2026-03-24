@@ -211,7 +211,8 @@ def simulate_zone(lat, lng, radius_km=1.0):
     conv_sql = f"""
     SELECT cz.region2, cz.region3,
            COUNT(*) AS res_cnt,
-           COUNT(DISTINCT c.id) AS car_cnt
+           COUNT(DISTINCT c.id) AS car_cnt,
+           AVG(TIMESTAMP_DIFF(r.end_at, r.start_at, MINUTE) / 60.0) AS avg_hours_per_res
     FROM `socar-data.soda_store.reservation_v2` r
     JOIN `socar-data.tianjin_replica.car_info` c ON r.car_id = c.id
     JOIN `socar-data.tianjin_replica.carzone_info` cz ON c.zone_id = cz.id
@@ -306,6 +307,27 @@ def simulate_zone(lat, lng, radius_km=1.0):
         conv_rate = total_gg_res / total_gg_access if total_gg_access > 0 else 0
         conv_level = '경기도'
 
+    # 건당 평균 이용시간 (region3 → region2 → 경기도 fallback)
+    r3_hours = None
+    r2_hours_sum, r2_hours_cnt = 0.0, 0
+    for cr in conv_rows:
+        h = float(cr.get('avg_hours_per_res', 0) or 0)
+        if h > 0:
+            r2_hours_sum += h * int(cr.get('res_cnt', 1))
+            r2_hours_cnt += int(cr.get('res_cnt', 1))
+            if cr.get('region3', '') == region3:
+                r3_hours = h
+
+    if r3_hours and r3_hours > 0:
+        avg_hours_per_res = round(r3_hours, 1)
+        hours_level = region3
+    elif r2_hours_cnt > 0:
+        avg_hours_per_res = round(r2_hours_sum / r2_hours_cnt, 1)
+        hours_level = region2
+    else:
+        avg_hours_per_res = 8.0
+        hours_level = '경기도 (기본값)'
+
     # 예상 주간 예약 (접속 기반 + 부름 전환)
     base_res = weekly_res if weekly_res > 0 else round(weekly_access * conv_rate)
     dtod_conversion = 0.5  # 부름 호출 중 존 개설 시 일반 예약으로 전환되는 비율
@@ -355,7 +377,6 @@ def simulate_zone(lat, lng, radius_km=1.0):
     target_util_zone_count = len(high_perf_utils)
 
     # 추천 공급대수 (카니발리제이션 보정 전)
-    avg_hours_per_res = 8
     target_util = min(target_util_pct / 100, 0.7)
     if target_util > 0:
         cars_needed = est_weekly_res * avg_hours_per_res / (168 * target_util)
@@ -391,6 +412,8 @@ def simulate_zone(lat, lng, radius_km=1.0):
         'total_res_90d': total_res_90d,
         'conv_rate': round(conv_rate, 6),
         'conv_level': conv_level,
+        'avg_hours_per_res': avg_hours_per_res,
+        'hours_level': hours_level,
         'base_res': base_res,
         'dtod_additional': dtod_additional,
         'est_weekly_res': est_weekly_res,
@@ -2315,6 +2338,7 @@ function showTimeline(zoneId, zoneName) {{
 
         left += '<div class="sim-section"><div class="sim-section-title">카니발리제이션 보정</div>';
         left += '<div class="sim-row"><span class="sim-label">반경 1km 기존 존</span><span class="sim-value">' + d.nearby_zone_count + '개 / ' + d.nearby_total_cars + '대</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">건당 이용시간</span><span class="sim-value">' + d.avg_hours_per_res + 'h <span style="font-size:9px;font-weight:400;color:#6b7394;">(' + d.hours_level + ')</span></span></div>';
         left += '<div class="sim-row"><span class="sim-label">목표 가동률</span><span class="sim-value">' + d.target_util + '% <span style="font-size:9px;font-weight:400;color:#6b7394;">(160만원↑ ' + d.target_util_zone_count + '개존 평균)</span></span></div>';
         left += '<div class="sim-row"><span class="sim-label">수요 기반 적정대수</span><span class="sim-value">' + d.raw_recommended_cars + '대</span></div>';
         left += '<div class="sim-row"><span class="sim-label">카니발 차감</span><span class="sim-value" style="color:#e74c3c">-' + d.cannibal_cars + '대</span></div>';
@@ -2355,7 +2379,8 @@ function showTimeline(zoneId, zoneName) {{
         right += '<code>반경 3km</code> 내 운영 존들의 대당매출·GP·가동률을 거리 역수 가중평균으로 산출</div>';
 
         right += '<div class="cr-section"><div class="cr-title">5. 수요 기반 적정대수</div>';
-        right += '<code>예상 주간 예약 × 8h</code> (건당 평균) ÷ <code>168h × 목표 가동률</code><br>';
+        right += '<code>예상 주간 예약 × 건당 이용시간</code> ÷ <code>168h × 목표 가동률</code><br>';
+        right += '건당 이용시간 = <code>region3</code> 3개월 평균 → <code>region2</code> → 경기도 순 fallback.<br>';
         right += '목표 가동률 = 경기도 내 대당매출 <code>160만원↑</code> 존들의 평균 가동률 (최대 70%)</div>';
 
         right += '<div class="cr-section"><div class="cr-title">6. 카니발리제이션 보정</div>';
