@@ -230,28 +230,48 @@ def simulate_zone(lat, lng, radius_km=1.0):
         cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=100", sql]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if r.returncode != 0:
-            raise RuntimeError(f"BQ error: {r.stderr[:300]}")
-        return json.loads(r.stdout)
+            err = r.stderr[:300] or r.stdout[:300]
+            raise RuntimeError(f"BQ error: {err}")
+        # bq가 returncode=0이지만 에러를 stdout에 출력하는 경우
+        out = r.stdout.strip()
+        if out.startswith('Error') or out.startswith('Syntax'):
+            raise RuntimeError(f"BQ error: {out[:300]}")
+        return json.loads(out)
 
-    # 6) 반경 100m 내 과거 존 이력 (폐존 state=0)
-    hist_dlat = 0.1 / 111.0
-    hist_dlng = 0.1 / (111.0 * abs(math.cos(math.radians(lat))))
+    # 6) 반경 300m 내 과거 존 이력 (폐존 state=0)
+    hist_dlat = 0.3 / 111.0
+    hist_dlng = 0.3 / (111.0 * abs(math.cos(math.radians(lat))))
     hist_sql = f"""
-    SELECT cz.id AS zone_id, cz.zone_name, cz.lat, cz.lng,
+    WITH nearby_zones AS (
+      SELECT z.legacy_zone_id AS zone_id, cz.zone_name, cz.lat, cz.lng
+      FROM `socar-data.socar_zone.zone` z
+      JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
+      WHERE z.region_1 = '경기도'
+        AND z.type IN ('ZONTP_NORMAL','ZONTP_D2D_STATION','ZONTP_D2D_PRIORITY')
+        AND cz.lat BETWEEN {lat - hist_dlat} AND {lat + hist_dlat}
+        AND cz.lng BETWEEN {lng - hist_dlng} AND {lng + hist_dlng}
+    ),
+    inactive_zones AS (
+      SELECT nz.zone_id, nz.zone_name, nz.lat, nz.lng
+      FROM nearby_zones nz
+      LEFT JOIN `socar-data.socar_biz_profit.profit_socar_car_daily` p
+        ON nz.zone_id = p.zone_id AND p.date = CURRENT_DATE() - 1
+      GROUP BY 1, 2, 3, 4
+      HAVING IFNULL(SUM(p.opr_day), 0) = 0
+    )
+    SELECT iz.zone_id, iz.zone_name, iz.lat, iz.lng,
            MIN(p.date) AS first_date, MAX(p.date) AS last_date,
            COUNT(DISTINCT p.date) AS operation_days,
            COUNT(DISTINCT p.car_id) AS total_cars_ever,
-           ROUND(AVG(p.revenue), 0) AS avg_daily_revenue,
            ROUND(SUM(p.revenue) / NULLIF(COUNT(DISTINCT p.car_id), 0) * 28.0 / NULLIF(COUNT(DISTINCT p.date), 0), 0) AS revenue_per_car_28d,
-           ROUND(SUM(p.gp) / NULLIF(COUNT(DISTINCT p.car_id), 0) * 28.0 / NULLIF(COUNT(DISTINCT p.date), 0), 0) AS gp_per_car_28d,
-           ROUND(AVG(p.utilization_rate), 1) AS avg_utilization
-    FROM `socar-data.tianjin_replica.carzone_info` cz
+           ROUND(SUM(p.profit) / NULLIF(COUNT(DISTINCT p.car_id), 0) * 28.0 / NULLIF(COUNT(DISTINCT p.date), 0), 0) AS gp_per_car_28d,
+           ROUND(SAFE_DIVIDE(SUM(o.op_min), SUM(o.dp_min) - SUM(o.bl_min)) * 100, 1) AS avg_utilization
+    FROM inactive_zones iz
     JOIN `socar-data.socar_biz_profit.profit_socar_car_daily` p
-      ON p.zone_id = cz.id
-    WHERE cz.state = 0 AND cz.region1 = '경기도'
-      AND cz.lat BETWEEN {lat - hist_dlat} AND {lat + hist_dlat}
-      AND cz.lng BETWEEN {lng - hist_dlng} AND {lng + hist_dlng}
-      AND p.car_state = '운영' AND p.car_sharing_type IN ('socar', 'zplus')
+      ON p.zone_id = iz.zone_id
+    LEFT JOIN `socar-data.socar_biz.operation_per_car_daily_v2` o
+      ON o.zone_id = iz.zone_id AND o.date = p.date
+    WHERE p.car_sharing_type IN ('socar', 'zplus')
     GROUP BY 1, 2, 3, 4
     """
 
@@ -2382,7 +2402,7 @@ function showTimeline(zoneId, zoneName) {{
 
         if (d.hist_zones && d.hist_zones.length > 0) {{
             left += '<div class="sim-section" style="background:#2a2040;border-radius:6px;padding:8px 10px;margin-top:8px;">';
-            left += '<div class="sim-section-title" style="color:#b388ff;">과거 존 이력 (반경 100m)</div>';
+            left += '<div class="sim-section-title" style="color:#b388ff;">과거 존 이력 (반경 300m)</div>';
             d.hist_zones.forEach(function(hz) {{
                 left += '<div style="margin-bottom:6px;">';
                 left += '<div style="font-weight:600;color:#e0e0e0;font-size:12px;">' + hz.zone_name + '</div>';
@@ -2390,7 +2410,7 @@ function showTimeline(zoneId, zoneName) {{
                 left += '<div style="font-size:11px;margin-top:2px;">';
                 left += '<span style="color:#8890a4;">대당매출</span> <b style="color:#ffb74d;">' + (hz.revenue_per_car_28d > 0 ? hz.revenue_per_car_28d.toLocaleString() + '원' : '-') + '</b>';
                 left += ' · <span style="color:#8890a4;">대당GP</span> <b>' + (hz.gp_per_car_28d > 0 ? hz.gp_per_car_28d.toLocaleString() + '원' : '-') + '</b>';
-                left += ' · <span style="color:#8890a4;">가동률</span> <b>' + hz.avg_utilization + '%</b>';
+                left += ' · <span style="color:#8890a4;">가동률</span> <b>' + (hz.avg_utilization > 0 ? hz.avg_utilization + '%' : '-') + '</b>';
                 left += '</div></div>';
             }});
             left += '<div style="font-size:9px;color:#6b7394;margin-top:4px;">※ 과거 실적 30% + 현재 추정 70% 블렌딩 반영</div>';
