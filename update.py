@@ -1463,13 +1463,14 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 .sim-body {{ display: flex; gap: 24px; }}
 .sim-left {{ flex: 1; min-width: 0; }}
 .sim-right {{
-    width: 320px; flex-shrink: 0; background: #262b3e; border-radius: 8px; padding: 16px 18px;
-    font-size: 12px; color: #8890a4; line-height: 1.7;
+    width: 320px; flex-shrink: 0; background: #323850; border: 1px solid #3a3f55;
+    border-radius: 8px; padding: 18px 20px;
+    font-size: 13px; color: #c0c8e0; line-height: 1.75;
 }}
-.sim-right h4 {{ font-size: 13px; font-weight: 700; color: #c0c8e0; margin-bottom: 10px; }}
-.sim-right .cr-section {{ margin-bottom: 12px; }}
-.sim-right .cr-title {{ font-size: 12px; font-weight: 700; color: #6b7394; margin-bottom: 4px; }}
-.sim-right code {{ background: #1e2233; padding: 1px 5px; border-radius: 3px; font-size: 11px; color: #42a5f5; }}
+.sim-right h4 {{ font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #4a5070; }}
+.sim-right .cr-section {{ margin-bottom: 14px; }}
+.sim-right .cr-title {{ font-size: 13px; font-weight: 700; color: #42a5f5; margin-bottom: 5px; }}
+.sim-right code {{ background: #1e2233; padding: 2px 6px; border-radius: 3px; font-size: 12px; color: #ffb74d; }}
 .sim-panel h3 {{ font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #3a3f55; }}
 .sim-row {{ display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }}
 .sim-row .sim-label {{ color: #8890a4; font-size: 11px; }}
