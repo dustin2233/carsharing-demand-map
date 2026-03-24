@@ -236,6 +236,68 @@ def query_reservation_timeline():
     return by_zone
 
 
+def query_parking_contract():
+    """존별 사업자명, 정산 방식, 대당 주차비"""
+    sql = """
+    SELECT
+        z.legacy_zone_id AS zone_id,
+        pr.name AS provider_name,
+        CASE
+            WHEN pp.settlement_type = 'PVSTP_BATCH' THEN '일괄정산'
+            WHEN pp.settlement_type = 'PVSTP_INDIVIDUAL' THEN '개별정산'
+            WHEN pp.settlement_type = 'PVSTP_RENT' THEN '임대'
+            WHEN pp.settlement_type = 'PVSTP_FREE' THEN '무료'
+            ELSE pp.settlement_type
+        END AS settlement_type,
+        CASE
+            WHEN rp.payment_cycle = 'REPAC_MONTH' AND pp.settlement_type = 'PVSTP_RENT'
+                THEN ROUND(SAFE_DIVIDE(rp.rent_price, IFNULL(COUNT(DISTINCT ci.id),1)),0)
+            WHEN rp.payment_cycle = 'REPAC_QUARTER' AND pp.settlement_type = 'PVSTP_RENT'
+                THEN ROUND(SAFE_DIVIDE(rp.rent_price, IFNULL(COUNT(DISTINCT ci.id),1))/3,0)
+            WHEN rp.payment_cycle = 'REPAC_ONE_YEAR' AND pp.settlement_type = 'PVSTP_RENT'
+                THEN ROUND(SAFE_DIVIDE(rp.rent_price, IFNULL(COUNT(DISTINCT ci.id),1))/12,0)
+            WHEN rp.payment_cycle = 'REPAC_TWO_MONTHS' AND pp.settlement_type = 'PVSTP_RENT'
+                THEN ROUND(SAFE_DIVIDE(rp.rent_price, IFNULL(COUNT(DISTINCT ci.id),1))/2,0)
+            WHEN rp.payment_cycle = 'REPAC_HALF_YEAR' AND pp.settlement_type = 'PVSTP_RENT'
+                THEN ROUND(SAFE_DIVIDE(rp.rent_price, IFNULL(COUNT(DISTINCT ci.id),1))/6,0)
+            ELSE stp.price
+        END AS price_per_car
+    FROM `socar-data.socar_zone.zone` z
+    LEFT JOIN `socar-data.socar_zone.parking` p ON p.id = z.parking_id
+    LEFT JOIN `socar-data.socar_zone.parking_contract` c ON c.parking_id = p.id
+    LEFT JOIN `socar-data.socar_zone.parking_settlement_policy` sp ON c.policy_id = sp.id
+    LEFT JOIN `socar-data.socar_zone.parking_policy` pp ON sp.id = pp.policy_id
+    LEFT JOIN `socar-data.socar_zone.settlement_type_policy` stp ON pp.id = stp.parking_policy_id
+    LEFT JOIN `socar-data.socar_zone.rent_policy` rp ON pp.id = rp.parking_policy_id
+    LEFT JOIN (
+        SELECT ci.*, z2.parking_id
+        FROM `socar-data.tianjin_replica.car_info` ci
+        LEFT JOIN `socar-data.socar_zone.zone` z2 ON z2.legacy_zone_id = ci.zone_id
+        WHERE ci.sharing_type = 'socar' AND ci.state IN (4,5) AND ci.level = 1
+    ) ci ON ci.parking_id = z.parking_id
+    LEFT JOIN `socar-data.socar_zone.parking_provider` pr ON c.provider_id = pr.id
+    WHERE z.legacy_zone_id IS NOT NULL AND z.legacy_zone_id NOT IN (0)
+        AND c.business_type <> 'CTRBT_CLEANING_BUSINESS'
+        AND pp.settlement_type IS NOT NULL
+        AND z.region_1 = '경기도'
+    GROUP BY z.legacy_zone_id, pr.name, pp.settlement_type, rp.rent_price, stp.price, rp.payment_cycle
+    """
+    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=5000", sql]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError(f"BQ error: {result.stderr}")
+    rows = json.loads(result.stdout)
+    result = {}
+    for r in rows:
+        zid = int(r.get('zone_id', 0))
+        result[zid] = {
+            'provider_name': r.get('provider_name', ''),
+            'settlement_type': r.get('settlement_type', ''),
+            'price_per_car': int(float(r.get('price_per_car', 0) or 0)),
+        }
+    return result
+
+
 def query_gcar_zones():
     """그린카 경기도 존 현황 (gcar_info_log 최근 날짜 기준, 존별 차량수)"""
     sql = """
@@ -797,19 +859,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .sidebar-header {
     padding: 16px 14px 10px; border-bottom: 1px solid #2a2f45;
 }
-.sidebar-header h1 { font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 4px; }
-.sidebar-header .date { font-size: 10px; color: #8890a4; }
+.sidebar-header h1 { font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+.sidebar-header .date { font-size: 10px; color: #8890a4; line-height: 1.5; }
 .stat-row {
     display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 14px;
     border-bottom: 1px solid #2a2f45;
 }
 .stat-card {
     display: flex; flex-direction: column; align-items: center;
-    background: #262b3e; border-radius: 5px; padding: 3px 8px; flex: 1; min-width: 65px;
+    background: #323850; border-radius: 5px; padding: 5px 8px; flex: 1; min-width: 65px;
 }
-.stat-card .label { font-size: 8px; color: #8890a4; white-space: nowrap; }
-.stat-card .value { font-size: 12px; font-weight: 700; color: #fff; }
-.stat-card.gcar { background: #3a2e1a; }
+.stat-card .label { font-size: 9px; color: #8890a4; white-space: nowrap; margin-bottom: 1px; }
+.stat-card .value { font-size: 13px; font-weight: 700; color: #fff; }
+.stat-card.socar .label { color: #42a5f5; }
+.stat-card.gcar .label { color: #ffb74d; }
 .sidebar-section {
     padding: 10px 14px 6px; border-bottom: 1px solid #2a2f45;
 }
@@ -874,12 +937,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .gap-panel table { color: #e0e0e0; }
 .gap-panel th { color: #8890a4; }
 .gap-panel td { color: #e0e0e0; }
-.leaflet-popup-content-wrapper { border-radius: 10px; background: #262b3e; color: #e0e0e0; }
+.leaflet-popup-content-wrapper { border-radius: 10px; background: #262b3e; color: #e0e0e0; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
 .leaflet-popup-tip { background: #262b3e; }
-.leaflet-popup-content { font-size: 13px; line-height: 1.6; min-width: 200px; }
-.popup-title { font-weight: 700; font-size: 14px; margin-bottom: 4px; color: #fff; }
-.popup-row { display: flex; gap: 6px; }
-.popup-label { color: #8890a4; min-width: 60px; }
+.leaflet-popup-content { font-size: 12px; line-height: 1.7; min-width: 220px; }
+.popup-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; padding-bottom: 6px; color: #fff; border-bottom: 1px solid #3a3f55; }
+.popup-row { display: flex; gap: 6px; align-items: center; padding: 1px 0; }
+.popup-label { color: #8890a4; min-width: 72px; font-size: 11px; flex-shrink: 0; }
+.popup-section { border-top: 1px solid #3a3f55; margin-top: 6px; padding-top: 6px; }
+.popup-section-title { font-weight: 600; font-size: 11px; color: #6b7394; margin-bottom: 4px; }
 .popup-badge {
     display: inline-block; padding: 1px 8px; border-radius: 10px;
     font-size: 11px; font-weight: 600; color: #fff;
@@ -939,11 +1004,19 @@ ZONE_JS = """
     function makePopup(z) {
         var d2d = z.is_d2d_car_exportable === 'ABLE' ? '부름 가능' : '부름 불가';
         var d2dColor = z.is_d2d_car_exportable === 'ABLE' ? '#27ae60' : '#e74c3c';
+        var contractHtml = '';
+        if (z.provider_name || z.settlement_type || z.price_per_car) {
+            contractHtml = '<div class="popup-section">' +
+                '<div class="popup-section-title">거래처 정보</div>' +
+                (z.provider_name ? '<div class="popup-row"><span class="popup-label">사업자</span><span>' + z.provider_name + '</span></div>' : '') +
+                (z.settlement_type ? '<div class="popup-row"><span class="popup-label">정산방식</span><span>' + z.settlement_type + '</span></div>' : '') +
+                (z.price_per_car ? '<div class="popup-row"><span class="popup-label">대당 주차비</span><span><b>' + fmtNum(z.price_per_car) + '원</b>/월</span></div>' : '') +
+                '</div>';
+        }
         var profitHtml = '';
         if (z.total_revenue > 0) {
-            profitHtml =
-                '<div style="border-top:1px solid #eee;margin-top:6px;padding-top:6px;position:relative;">' +
-                '<div style="font-weight:600;font-size:12px;color:#555;margin-bottom:3px;">실적<span style="position:absolute;right:0;font-weight:400;font-size:10px;color:#8890a4;">4주 수치</span></div>' +
+            profitHtml = '<div class="popup-section">' +
+                '<div class="popup-section-title">실적 <span style="font-weight:400;font-size:10px;color:#8890a4;margin-left:4px;">최근 4주</span></div>' +
                 '<div class="popup-row"><span class="popup-label">총 매출</span><b>' + fmtNum(z.total_revenue) + '원</b></div>' +
                 '<div class="popup-row"><span class="popup-label">대당 매출</span><b>' + fmtNum(z.revenue_per_car_28d) + '원</b></div>' +
                 '<div class="popup-row"><span class="popup-label">대당 GP</span><b>' + fmtNum(z.gp_per_car_28d) + '원</b></div>' +
@@ -951,12 +1024,13 @@ ZONE_JS = """
                 '</div>';
         }
         return '<div class="popup-title">' + z.zone_name + '</div>' +
-            '<div class="popup-row"><span class="popup-label">존 ID</span><span style="color:#666;font-family:monospace">' + z.zone_id + '</span></div>' +
+            '<div class="popup-row"><span class="popup-label">존 ID</span><span style="font-family:monospace;color:#aab0c4">' + z.zone_id + '</span></div>' +
             '<div class="popup-row"><span class="popup-label">주차장</span><span>' + z.parking_name + '</span></div>' +
             '<div class="popup-row"><span class="popup-label">주소</span><span>' + z.address + '</span></div>' +
             '<div class="popup-row"><span class="popup-label">차량</span><span><b>' + z.car_count + '</b>대</span></div>' +
             '<div class="popup-row"><span class="popup-label">유형</span><span class="popup-badge" style="background:' + zoneColor(z.imaginary) + '">' + zoneLabel(z.imaginary) + '</span></div>' +
             '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + d2dColor + ';font-weight:600">' + d2d + '</span></div>' +
+            contractHtml +
             profitHtml;
     }
 """
@@ -966,7 +1040,7 @@ def jd(data):
     return json.dumps(data, ensure_ascii=False)
 
 
-def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, timeline_data=None):
+def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, parking_contract=None, timeline_data=None):
     """잠재 수요 지도 HTML 생성"""
     if analysis is None:
         analysis = {}
@@ -985,9 +1059,11 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         gcar_data = []
     if socar_supply is None:
         socar_supply = {}
+    if parking_contract is None:
+        parking_contract = {}
     if timeline_data is None:
         timeline_data = {}
-    # profit 데이터를 zones_data에 병합
+    # profit + 주차 계약 데이터를 zones_data에 병합
     for z in zones_data:
         zid = int(z.get('zone_id', 0))
         p = profit_data.get(zid, {})
@@ -995,6 +1071,10 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         z['revenue_per_car_28d'] = p.get('revenue_per_car_28d', 0)
         z['gp_per_car_28d'] = p.get('gp_per_car_28d', 0)
         z['utilization_rate'] = p.get('utilization_rate', 0)
+        pc = parking_contract.get(zid, {})
+        z['provider_name'] = pc.get('provider_name', '')
+        z['settlement_type'] = pc.get('settlement_type', '')
+        z['price_per_car'] = pc.get('price_per_car', 0)
     # 주평균 계산 (90일 / 7)
     num_weeks = 90 / 7
     access_heat = [[float(r['lat']), float(r['lng']), round(int(r['access_count']) / num_weeks)] for r in access_data]
@@ -1093,7 +1173,8 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 <div class="sidebar">
     <div class="sidebar-header">
         <h1>경기도 카셰어링 잠재 수요 지도</h1>
-        <div class="date">{THREE_MONTHS_AGO} ~ {TODAY} | 업데이트: {TODAY}</div>
+        <div class="date">{THREE_MONTHS_AGO} ~ {TODAY}</div>
+        <div class="date">업데이트: {TODAY}</div>
     </div>
     <div class="stat-row">
         <div class="stat-card"><span class="label">접속/주</span><span class="value">{total_a:,}</span></div>
@@ -1101,8 +1182,10 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         <div class="stat-card"><span class="label">부름/주</span><span class="value">{total_d:,}</span></div>
     </div>
     <div class="stat-row">
-        <div class="stat-card"><span class="label">쏘카 존</span><span class="value">{total_z:,}</span></div>
-        <div class="stat-card"><span class="label">쏘카 차량</span><span class="value">{total_cars:,}</span></div>
+        <div class="stat-card socar"><span class="label">쏘카 존</span><span class="value">{total_z:,}</span></div>
+        <div class="stat-card socar"><span class="label">쏘카 차량</span><span class="value">{total_cars:,}</span></div>
+    </div>
+    <div class="stat-row">
         <div class="stat-card gcar"><span class="label">그린카 존</span><span class="value">{total_gcar_z:,}</span></div>
         <div class="stat-card gcar"><span class="label">그린카 차량</span><span class="value">{total_gcar_cars:,}</span></div>
     </div>
@@ -2013,10 +2096,14 @@ def _build_html():
         profit_data = {int(k): v for k, v in profit_data.items()}
     gcar_data = _load_cache("gcar") or []
     socar_supply = _load_cache("socar_supply") or {}
+    parking_contract = _load_cache("parking_contract") or {}
+    if parking_contract:
+        parking_contract = {int(k): v for k, v in parking_contract.items()}
     timeline_data = _load_cache("timeline") or {}
 
     html = generate_index(access, reservation, zones, gaps, analysis, dtod, profit_data,
-                          gcar_data=gcar_data, socar_supply=socar_supply, timeline_data=timeline_data)
+                          gcar_data=gcar_data, socar_supply=socar_supply,
+                          parking_contract=parking_contract, timeline_data=timeline_data)
     path = os.path.join(OUTPUT_DIR, "index.html")
     with open(path, "w") as f:
         f.write(html)
@@ -2087,28 +2174,32 @@ def update_zone():
     """존/실적 데이터만 업데이트 (존 정보, 실적, 그린카, 예약 타임라인)"""
     print(f"[{datetime.now()}] 존/실적 데이터 업데이트")
 
-    print("  1/5 운영 존 + 차량 대수 조회...")
+    print("  1/6 운영 존 + 차량 대수 조회...")
     zones = query_zones()
     print(f"       {len(zones)} 존, {sum(int(z.get('car_count',0)) for z in zones):,} 대")
 
-    print("  2/5 존별 실적 조회...")
+    print("  2/6 존별 실적 조회...")
     profit_data = query_zone_profit()
     print(f"       {len(profit_data)} 존 실적")
 
-    print("  3/5 그린카 존 현황 조회...")
+    print("  3/6 주차 계약 정보 조회...")
+    parking_contract = query_parking_contract()
+    print(f"       {len(parking_contract)} 존 계약")
+
+    print("  4/6 그린카 존 현황 조회...")
     gcar_data = query_gcar_zones()
     print(f"       {len(gcar_data)} 존")
 
-    print("  4/5 쏘카 지역별 실 운영 차량/존 수...")
+    print("  5/6 쏘카 지역별 실 운영 차량/존 수...")
     socar_supply = query_socar_supply_by_region()
     print(f"       {len(socar_supply)} 지역")
 
-    print("  5/5 예약 타임라인 조회...")
+    print("  6/6 예약 타임라인 조회...")
     timeline_data = query_reservation_timeline()
     print(f"       {len(timeline_data)} 존, {sum(len(v) for v in timeline_data.values()):,} 건")
 
-    for name, data in [("zones", zones), ("profit", profit_data), ("gcar", gcar_data),
-                       ("socar_supply", socar_supply), ("timeline", timeline_data)]:
+    for name, data in [("zones", zones), ("profit", profit_data), ("parking_contract", parking_contract),
+                       ("gcar", gcar_data), ("socar_supply", socar_supply), ("timeline", timeline_data)]:
         _save_cache(name, data)
 
     _build_html()
