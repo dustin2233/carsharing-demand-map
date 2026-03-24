@@ -306,8 +306,11 @@ def simulate_zone(lat, lng, radius_km=1.0):
         conv_rate = total_gg_res / total_gg_access if total_gg_access > 0 else 0
         conv_level = '경기도'
 
-    # 예상 주간 예약 (반경 내 실제 예약이 있으면 그대로, 없으면 접속 × 전환율)
-    est_weekly_res = weekly_res if weekly_res > 0 else round(weekly_access * conv_rate)
+    # 예상 주간 예약 (접속 기반 + 부름 전환)
+    base_res = weekly_res if weekly_res > 0 else round(weekly_access * conv_rate)
+    dtod_conversion = 0.5  # 부름 호출 중 존 개설 시 일반 예약으로 전환되는 비율
+    dtod_additional = round(weekly_dtod * dtod_conversion)
+    est_weekly_res = base_res + dtod_additional
 
     # 인근 존 실적 (캐시에서)
     profit_data = _load_cache("profit") or {}
@@ -380,6 +383,8 @@ def simulate_zone(lat, lng, radius_km=1.0):
         'total_res_90d': total_res_90d,
         'conv_rate': round(conv_rate, 6),
         'conv_level': conv_level,
+        'base_res': base_res,
+        'dtod_additional': dtod_additional,
         'est_weekly_res': est_weekly_res,
         'bench_zone_count': len(bench_zones),
         'est_rev_per_car': est_rev_per_car,
@@ -2305,6 +2310,7 @@ function showTimeline(zoneId, zoneName) {{
 
         left += '<div class="sim-section"><div class="sim-section-title">최종 결과</div>';
         left += '<div class="sim-row"><span class="sim-label">예상 주간 예약</span><span class="sim-value">' + d.est_weekly_res.toLocaleString() + '건</span></div>';
+        left += '<div style="font-size:10px;color:#6b7394;text-align:right;margin-top:-2px;">(접속기반 ' + d.base_res + ' + 부름전환 ' + d.dtod_additional + ')</div>';
         left += '<div class="sim-row"><span class="sim-label">추천 공급대수</span><span class="sim-value" style="color:#42a5f5;font-size:15px">' + d.recommended_cars + '대</span></div>';
         left += '<div class="sim-row"><span class="sim-label">예상 대당매출 (4주)</span><span class="sim-value" style="color:#ffb74d">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
         left += '</div>';
@@ -2329,7 +2335,9 @@ function showTimeline(zoneId, zoneName) {{
         right += '해당 지점의 <code>region3</code> 전환율 우선 적용. 데이터 부족 시 <code>region2</code> → <code>경기도 전체</code> 순으로 fallback.<br>전환율 = 지역 예약건수 ÷ 지역 접속수</div>';
 
         right += '<div class="cr-section"><div class="cr-title">3. 예상 주간 예약</div>';
-        right += '반경 1km 내 실제 예약이 있으면 그 값 사용. 없으면 <code>접속수 × 전환율</code>로 추정</div>';
+        right += '접속 기반: 반경 1km 내 실제 예약이 있으면 그 값, 없으면 <code>접속수 × 전환율</code>로 추정.<br>';
+        right += '부름 전환: 반경 내 부름 호출의 <code>50%</code>를 추가 예약 수요로 가산 (존 개설 시 일반 예약 전환 기대분).<br>';
+        right += '<b>예상 예약 = 접속 기반 + 부름 × 0.5</b></div>';
 
         right += '<div class="cr-section"><div class="cr-title">4. 인근 벤치마크</div>';
         right += '<code>반경 3km</code> 내 운영 존들의 대당매출·GP·가동률을 거리 역수 가중평균으로 산출</div>';
