@@ -2231,7 +2231,7 @@ function showTimeline(zoneId, zoneName) {{
             ? '' : '{ngrok_url}';
         fetch(simApiBase + '/api/simulate', {{
             method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
+            headers: {{ 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' }},
             body: JSON.stringify({{ lat: lat, lng: lng, radius: 1.0 }})
         }})
         .then(function(resp) {{
