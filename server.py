@@ -47,6 +47,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.handle_update_zone()
         elif self.path == '/api/update':
             self.handle_update_demand()
+        elif self.path == '/api/simulate':
+            self.handle_simulate()
         else:
             self.send_error(404)
 
@@ -126,6 +128,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except subprocess.TimeoutExpired:
             self._send_json(504, {'error': '업데이트 시간 초과 (10분)'})
         except Exception as e:
+            self._send_json(500, {'error': str(e)})
+
+    def handle_simulate(self):
+        """존 개설 시뮬레이션 — 실시간 BQ 쿼리"""
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            lat = float(body['lat'])
+            lng = float(body['lng'])
+            radius = float(body.get('radius', 1.0))
+            print(f"[{datetime.now()}] 시뮬레이션: ({lat:.5f}, {lng:.5f}), 반경 {radius}km")
+
+            from update import simulate_zone
+            result = simulate_zone(lat, lng, radius)
+            self._send_json(200, result)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
             self._send_json(500, {'error': str(e)})
 
     def log_message(self, format, *args):

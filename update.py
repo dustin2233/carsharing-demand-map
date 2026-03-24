@@ -140,6 +140,241 @@ def query_dtod():
     return rows
 
 
+def simulate_zone(lat, lng, radius_km=1.0):
+    """존 개설 시뮬레이션 — 실시간 BQ 쿼리로 정확한 수요 산출"""
+    # 위도/경도 → 반경 변환 (대략)
+    dlat = radius_km / 111.0
+    dlng = radius_km / (111.0 * abs(math.cos(math.radians(lat))))
+
+    lat_min, lat_max = lat - dlat, lat + dlat
+    lng_min, lng_max = lng - dlng, lng + dlng
+
+    num_weeks = 90 / 7
+
+    # 1) 반경 내 앱 접속수 (LIMIT 없이 정확한 수)
+    access_sql = f"""
+    WITH markers AS (
+      SELECT location.lat AS lat, location.lng AS lng
+      FROM `socar-data.socar_server_3.GET_MARKERS_V2`
+      WHERE timeMs >= TIMESTAMP('{THREE_MONTHS_AGO}', 'Asia/Seoul')
+        AND timeMs < TIMESTAMP('{NEXT_DAY}', 'Asia/Seoul')
+        AND location.lat BETWEEN {lat_min} AND {lat_max}
+        AND location.lng BETWEEN {lng_min} AND {lng_max}
+      UNION ALL
+      SELECT location.lat AS lat, location.lng AS lng
+      FROM `socar-data.socar_server_3.GET_MARKERS`
+      WHERE timeMs >= TIMESTAMP('{THREE_MONTHS_AGO}', 'Asia/Seoul')
+        AND timeMs < TIMESTAMP('{NEXT_DAY}', 'Asia/Seoul')
+        AND location.lat BETWEEN {lat_min} AND {lat_max}
+        AND location.lng BETWEEN {lng_min} AND {lng_max}
+    )
+    SELECT COUNT(*) AS total_access FROM markers
+    WHERE lat IS NOT NULL AND lng IS NOT NULL
+    """
+
+    # 2) 반경 내 예약 생성수
+    res_sql = f"""
+    SELECT COUNT(*) AS total_res
+    FROM `socar-data.soda_store.reservation_v2`
+    WHERE date >= '{THREE_MONTHS_AGO}' AND date <= '{TODAY}'
+      AND state = 3 AND member_imaginary IN (0,9)
+      AND reservation_created_lat BETWEEN {lat_min} AND {lat_max}
+      AND reservation_created_lng BETWEEN {lng_min} AND {lng_max}
+    """
+
+    # 3) 반경 내 부름 호출수
+    dtod_sql = f"""
+    SELECT COUNT(*) AS total_dtod
+    FROM `socar-data.tianjin_replica.reservation_dtod_info`
+    WHERE created_at >= TIMESTAMP('{THREE_MONTHS_AGO}', 'Asia/Seoul')
+      AND created_at < TIMESTAMP('{NEXT_DAY}', 'Asia/Seoul')
+      AND start_lat BETWEEN {lat_min} AND {lat_max}
+      AND start_lng BETWEEN {lng_min} AND {lng_max}
+    """
+
+    # 4) 해당 지역의 region2/3 파악 (가장 가까운 존 기준)
+    zones = _load_cache("zones") or []
+    nearest_zone = None
+    nearest_dist = float('inf')
+    for z in zones:
+        d = ((float(z['lat']) - lat)**2 + (float(z['lng']) - lng)**2) ** 0.5
+        if d < nearest_dist:
+            nearest_dist = d
+            nearest_zone = z
+
+    region2 = nearest_zone.get('region2', '') if nearest_zone else ''
+    region3 = nearest_zone.get('region3', '') if nearest_zone else ''
+
+    # 5) region3 / region2 전환율 (예약건수 기반, 접속 대비)
+    # 가벼운 쿼리: region별 예약건수 + 차량수 (접속은 캐시 활용)
+    conv_sql = f"""
+    SELECT cz.region2, cz.region3,
+           COUNT(*) AS res_cnt,
+           COUNT(DISTINCT c.id) AS car_cnt
+    FROM `socar-data.soda_store.reservation_v2` r
+    JOIN `socar-data.tianjin_replica.car_info` c ON r.car_id = c.id
+    JOIN `socar-data.tianjin_replica.carzone_info` cz ON c.zone_id = cz.id
+    WHERE r.date >= '{THREE_MONTHS_AGO}' AND r.date <= '{TODAY}'
+      AND cz.region1 = '경기도' AND cz.state = 1
+      AND cz.imaginary IN (0,3,5) AND cz.visibility = 1
+      AND r.state = 3 AND r.member_imaginary IN (0,9)
+      AND cz.region2 = '{region2}'
+    GROUP BY 1, 2
+    ORDER BY cz.region3
+    """
+
+    # BQ 쿼리 실행
+    def bq_single(sql):
+        cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=100", sql]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            raise RuntimeError(f"BQ error: {r.stderr[:300]}")
+        return json.loads(r.stdout)
+
+    access_rows = bq_single(access_sql)
+    res_rows = bq_single(res_sql)
+    dtod_rows = bq_single(dtod_sql)
+
+    total_access_90d = int(access_rows[0]['total_access']) if access_rows else 0
+    total_res_90d = int(res_rows[0]['total_res']) if res_rows else 0
+    total_dtod_90d = int(dtod_rows[0]['total_dtod']) if dtod_rows else 0
+
+    weekly_access = round(total_access_90d / num_weeks)
+    weekly_res = round(total_res_90d / num_weeks)
+    weekly_dtod = round(total_dtod_90d / num_weeks)
+
+    # 전환율 계산: 캐시된 접속 데이터에서 region별 접속수 집계
+    cached_access = _load_cache("access") or []
+    # region별 접속수: 각 접속 좌표를 가장 가까운 존의 region에 배정
+    region_access = {}
+    for z in zones:
+        r2 = z.get('region2', '')
+        r3 = z.get('region3', '')
+        if r2 not in region_access:
+            region_access[r2] = {'total': 0, 'by_r3': {}}
+        if r3 and r3 not in region_access[r2]['by_r3']:
+            region_access[r2]['by_r3'][r3] = 0
+    # 존별 접속수를 zone의 region에 귀속 (간이 방식: 존 위치에서 가장 가까운 접속 격자)
+    for a in cached_access:
+        alat, alng, cnt = float(a['lat']), float(a['lng']), int(a['access_count'])
+        best_d, best_r2, best_r3 = float('inf'), '', ''
+        for z in zones:
+            d = (float(z['lat']) - alat)**2 + (float(z['lng']) - alng)**2
+            if d < best_d:
+                best_d = d
+                best_r2 = z.get('region2', '')
+                best_r3 = z.get('region3', '')
+        if best_r2:
+            if best_r2 not in region_access:
+                region_access[best_r2] = {'total': 0, 'by_r3': {}}
+            region_access[best_r2]['total'] += cnt
+            if best_r3:
+                region_access[best_r2]['by_r3'][best_r3] = region_access[best_r2]['by_r3'].get(best_r3, 0) + cnt
+
+    # 전환율 = 예약건수 / 접속수 (region3 → region2 fallback)
+    conv_rows = bq_single(conv_sql)
+
+    region3_conv = None
+    region2_conv = None
+    region2_res_total = sum(int(cr.get('res_cnt', 0)) for cr in conv_rows)
+    region2_access_total = region_access.get(region2, {}).get('total', 0)
+
+    if region2_access_total > 0:
+        region2_conv = region2_res_total / region2_access_total
+
+    # region3 전환율
+    r3_access = region_access.get(region2, {}).get('by_r3', {}).get(region3, 0)
+    r3_res = 0
+    for cr in conv_rows:
+        if cr.get('region3', '') == region3:
+            r3_res = int(cr.get('res_cnt', 0))
+    if r3_access > 0 and r3_res > 0:
+        region3_conv = r3_res / r3_access
+
+    # region3 전환율 우선, 없으면 region2
+    if region3_conv is not None and region3_conv > 0:
+        conv_rate = region3_conv
+        conv_level = region3
+    elif region2_conv is not None and region2_conv > 0:
+        conv_rate = region2_conv
+        conv_level = region2
+    else:
+        # 최종 fallback: 경기도 전체
+        total_gg_access = sum(v.get('total', 0) for v in region_access.values())
+        total_gg_res = sum(int(cr.get('res_cnt', 0)) for cr in conv_rows)
+        conv_rate = total_gg_res / total_gg_access if total_gg_access > 0 else 0
+        conv_level = '경기도'
+
+    # 예상 주간 예약 (반경 내 실제 예약이 있으면 그대로, 없으면 접속 × 전환율)
+    est_weekly_res = weekly_res if weekly_res > 0 else round(weekly_access * conv_rate)
+
+    # 인근 존 실적 (캐시에서)
+    profit_data = _load_cache("profit") or {}
+    if profit_data:
+        profit_data = {int(k): v for k, v in profit_data.items()}
+
+    bench_zones = []
+    bench_radius = 3.0
+    for z in zones:
+        zd = ((float(z['lat']) - lat)**2 + (float(z['lng']) - lng)**2) ** 0.5 * 111
+        if zd <= bench_radius and int(z.get('car_count', 0)) > 0:
+            zid = int(z['zone_id'])
+            p = profit_data.get(zid, {})
+            rev = p.get('revenue_per_car_28d', 0)
+            gp = p.get('gp_per_car_28d', 0)
+            util = p.get('utilization_rate', 0)
+            if rev > 0:
+                bench_zones.append({'dist': zd, 'rev': rev, 'gp': gp, 'util': util,
+                                    'name': z.get('zone_name', ''), 'cars': int(z['car_count'])})
+
+    bench_zones.sort(key=lambda x: x['dist'])
+
+    # 가중평균 실적
+    w_rev, w_gp, w_util, w_total = 0, 0, 0, 0
+    for bz in bench_zones:
+        w = 1 / max(bz['dist'], 0.1)
+        w_rev += bz['rev'] * w
+        w_gp += bz['gp'] * w
+        w_util += bz['util'] * w
+        w_total += w
+
+    est_rev_per_car = round(w_rev / w_total) if w_total > 0 else 0
+    est_gp_per_car = round(w_gp / w_total) if w_total > 0 else 0
+    avg_util = w_util / w_total if w_total > 0 else 40
+
+    # 추천 공급대수
+    avg_hours_per_res = 8
+    target_util = min(avg_util / 100, 0.7)
+    if target_util > 0:
+        cars_needed = est_weekly_res * avg_hours_per_res / (168 * target_util)
+    else:
+        cars_needed = est_weekly_res / 3 if est_weekly_res >= 3 else (1 if est_weekly_res >= 1 else 0)
+    recommended_cars = max(0, round(cars_needed))
+
+    is_recommend = recommended_cars >= 1 and est_rev_per_car >= 1000000
+
+    return {
+        'lat': lat, 'lng': lng, 'radius_km': radius_km,
+        'region2': region2, 'region3': region3,
+        'weekly_access': weekly_access,
+        'weekly_res': weekly_res,
+        'weekly_dtod': weekly_dtod,
+        'total_access_90d': total_access_90d,
+        'total_res_90d': total_res_90d,
+        'conv_rate': round(conv_rate, 6),
+        'conv_level': conv_level,
+        'est_weekly_res': est_weekly_res,
+        'bench_zone_count': len(bench_zones),
+        'est_rev_per_car': est_rev_per_car,
+        'est_gp_per_car': est_gp_per_car,
+        'avg_util': round(avg_util, 1),
+        'recommended_cars': recommended_cars,
+        'is_recommend': is_recommend,
+        'nearest_zone': nearest_zone.get('zone_name', '') if nearest_zone else '',
+        'nearest_zone_dist_km': round(nearest_dist * 111, 1) if nearest_zone else None,
+    }
+
+
 def query_zones():
     """운영 존 + 차량 대수 + 부름 가능 여부 (is_d2d_car_exportable)"""
     sql = """
@@ -1937,21 +2172,6 @@ function showTimeline(zoneId, zoneName) {{
     var simMarker = null;
     var simLat, simLng;
 
-    // 경기도 전체 전환율
-    var totalAccess = accessData.reduce(function(s,d) {{ return s + d[2]; }}, 0);
-    var totalRes = resData.reduce(function(s,d) {{ return s + d[2]; }}, 0);
-    var conversionRate = totalAccess > 0 ? totalRes / totalAccess : 0;
-
-    // 거리 계산 (km)
-    function distKm(lat1, lng1, lat2, lng2) {{
-        var R = 6371;
-        var dLat = (lat2 - lat1) * Math.PI / 180;
-        var dLng = (lng2 - lng1) * Math.PI / 180;
-        var a = Math.sin(dLat/2)*Math.sin(dLat/2) +
-                Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    }}
-
     // 우클릭 → 컨텍스트 메뉴
     map.on('contextmenu', function(e) {{
         e.originalEvent.preventDefault();
@@ -1991,119 +2211,66 @@ function showTimeline(zoneId, zoneName) {{
             }})
         }}).addTo(map);
 
-        var DEMAND_RADIUS = 1.0; // km
-        var BENCH_RADIUS = 3.0; // km
+        // 로딩 표시
+        simContent.innerHTML = '<div style="text-align:center;padding:30px 0;"><div class="sim-marker-pin" style="display:inline-flex;width:40px;height:40px;font-size:16px;">?</div><div style="margin-top:12px;color:#8890a4;font-size:12px;">BQ 쿼리 실행 중...</div><div style="color:#6b7394;font-size:10px;margin-top:4px;">반경 1km 실시간 접속/예약 집계 중</div></div>';
+        simPanel.style.display = 'block';
+        simOverlay.style.display = 'block';
 
-        // 1) 반경 내 주간 접속/예약/부름
-        var nearAccess = 0, nearRes = 0, nearDtod = 0;
-        accessData.forEach(function(d) {{
-            if (distKm(lat, lng, d[0], d[1]) <= DEMAND_RADIUS) nearAccess += d[2];
+        // 서버 API 호출
+        fetch('/api/simulate', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{ lat: lat, lng: lng, radius: 1.0 }})
+        }})
+        .then(function(resp) {{ return resp.json(); }})
+        .then(function(d) {{
+            if (d.error) {{ simContent.innerHTML = '<div style="color:#e74c3c;padding:20px;text-align:center;">오류: ' + d.error + '</div>'; return; }}
+            renderSimResult(d);
+        }})
+        .catch(function(err) {{
+            simContent.innerHTML = '<div style="color:#e74c3c;padding:20px;text-align:center;">서버 연결 실패<br><span style="font-size:10px;color:#8890a4;">로컬 서버(localhost:8080)가 실행 중인지 확인하세요</span></div>';
         }});
-        resData.forEach(function(d) {{
-            if (distKm(lat, lng, d[0], d[1]) <= DEMAND_RADIUS) nearRes += d[2];
-        }});
-        dtodData.forEach(function(d) {{
-            if (distKm(lat, lng, d[0], d[1]) <= DEMAND_RADIUS) nearDtod += d[2];
-        }});
+    }}
 
-        // 2) 인근 벤치마크 존 (3km)
-        var nearZones = [];
-        zonesData.forEach(function(z) {{
-            var d = distKm(lat, lng, parseFloat(z.lat), parseFloat(z.lng));
-            if (d <= BENCH_RADIUS && z.car_count > 0) {{
-                nearZones.push({{ zone: z, dist: d }});
-            }}
-        }});
-        nearZones.sort(function(a,b) {{ return a.dist - b.dist; }});
-
-        // 인근 존의 가중평균 실적 (거리 역수 가중)
-        var wRevSum = 0, wGpSum = 0, wUtilSum = 0, wTotal = 0;
-        var avgResPerCar = 0, resPerCarCount = 0;
-        nearZones.forEach(function(nz) {{
-            var z = nz.zone;
-            var w = 1 / Math.max(nz.dist, 0.1);
-            if (z.revenue_per_car_28d > 0) {{
-                wRevSum += z.revenue_per_car_28d * w;
-                wGpSum += z.gp_per_car_28d * w;
-                wUtilSum += z.utilization_rate * w;
-                wTotal += w;
-            }}
-        }});
-
-        var estRevPerCar = wTotal > 0 ? Math.round(wRevSum / wTotal) : 0;
-        var estGpPerCar = wTotal > 0 ? Math.round(wGpSum / wTotal) : 0;
-        var avgUtil = wTotal > 0 ? wUtilSum / wTotal : 40;
-
-        // 3) 추정 예약 수 (주간)
-        var estWeeklyRes = nearRes > 0 ? nearRes : Math.round(nearAccess * conversionRate);
-
-        // 4) 추천 공급대수
-        // 인근 존 기준 대당 주간 예약수 산출
-        var benchZonesWithProfit = nearZones.filter(function(nz) {{ return nz.zone.total_revenue > 0; }});
-        var nearTotalCars = 0, nearTotalAccess = 0;
-        benchZonesWithProfit.forEach(function(nz) {{ nearTotalCars += nz.zone.car_count; }});
-
-        var recommendedCars;
-        if (nearTotalCars > 0 && benchZonesWithProfit.length > 0) {{
-            // 인근 존들의 평균 대당 주간 예약 → 역산
-            // 가동률 기반: 대당 주간 가용시간 = 168h, 목표가동률 = 인근평균
-            // 예약 1건 평균 ~8h 가정
-            var avgHoursPerRes = 8;
-            var targetUtil = Math.min(avgUtil / 100, 0.7);
-            var carsNeeded = estWeeklyRes * avgHoursPerRes / (168 * targetUtil);
-            recommendedCars = Math.round(carsNeeded);
-        }} else {{
-            // 벤치마크 없으면 보수적 추정
-            recommendedCars = estWeeklyRes >= 3 ? Math.round(estWeeklyRes / 3) : (estWeeklyRes >= 1 ? 1 : 0);
-        }}
-        if (recommendedCars < 0) recommendedCars = 0;
-
-        // 5) 최근접 존
-        var nearestZone = nearZones.length > 0 ? nearZones[0] : null;
-
-        // 6) 추천 여부
-        var isRecommend = recommendedCars >= 1 && estRevPerCar >= 1000000;
-
-        // 결과 렌더링
+    function renderSimResult(d) {{
         var html = '';
-        html += '<div class="sim-row"><span class="sim-label">좌표</span><span class="sim-value" style="font-size:11px;font-family:monospace;">' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</span></div>';
-        if (nearestZone) {{
-            html += '<div class="sim-row"><span class="sim-label">최근접 존</span><span class="sim-value" style="font-size:11px;">' + nearestZone.zone.zone_name + ' (' + nearestZone.dist.toFixed(1) + 'km)</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">좌표</span><span class="sim-value" style="font-size:11px;font-family:monospace;">' + d.lat.toFixed(5) + ', ' + d.lng.toFixed(5) + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">지역</span><span class="sim-value" style="font-size:11px;">' + d.region2 + ' ' + d.region3 + '</span></div>';
+        if (d.nearest_zone) {{
+            html += '<div class="sim-row"><span class="sim-label">최근접 존</span><span class="sim-value" style="font-size:11px;">' + d.nearest_zone + ' (' + d.nearest_zone_dist_km + 'km)</span></div>';
         }}
 
-        html += '<div class="sim-section"><div class="sim-section-title">반경 1km 수요 (주간)</div>';
-        html += '<div class="sim-row"><span class="sim-label">앱 접속</span><span class="sim-value">' + nearAccess.toLocaleString() + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">예약 생성</span><span class="sim-value">' + nearRes.toLocaleString() + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">부름 호출</span><span class="sim-value">' + nearDtod.toLocaleString() + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">전환율 (경기도)</span><span class="sim-value">' + (conversionRate * 100).toFixed(2) + '%</span></div>';
+        html += '<div class="sim-section"><div class="sim-section-title">반경 1km 수요 — 주간 (90일 기준)</div>';
+        html += '<div class="sim-row"><span class="sim-label">앱 접속</span><span class="sim-value">' + d.weekly_access.toLocaleString() + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">예약 생성</span><span class="sim-value">' + d.weekly_res.toLocaleString() + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">부름 호출</span><span class="sim-value">' + d.weekly_dtod.toLocaleString() + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">전환율 (' + d.conv_level + ')</span><span class="sim-value">' + (d.conv_rate * 100).toFixed(2) + '%</span></div>';
         html += '</div>';
 
-        html += '<div class="sim-section"><div class="sim-section-title">인근 벤치마크 (반경 3km, ' + nearZones.length + '개 존)</div>';
-        html += '<div class="sim-row"><span class="sim-label">평균 대당매출 (4주)</span><span class="sim-value">' + (estRevPerCar > 0 ? estRevPerCar.toLocaleString() + '원' : '-') + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">평균 대당GP (4주)</span><span class="sim-value">' + (estGpPerCar > 0 ? estGpPerCar.toLocaleString() + '원' : '-') + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">평균 가동률</span><span class="sim-value">' + (wTotal > 0 ? avgUtil.toFixed(1) + '%' : '-') + '</span></div>';
+        html += '<div class="sim-section"><div class="sim-section-title">인근 벤치마크 (반경 3km, ' + d.bench_zone_count + '개 존)</div>';
+        html += '<div class="sim-row"><span class="sim-label">평균 대당매출 (4주)</span><span class="sim-value">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">평균 대당GP (4주)</span><span class="sim-value">' + (d.est_gp_per_car > 0 ? d.est_gp_per_car.toLocaleString() + '원' : '-') + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">평균 가동률</span><span class="sim-value">' + (d.avg_util > 0 ? d.avg_util.toFixed(1) + '%' : '-') + '</span></div>';
         html += '</div>';
 
         html += '<div class="sim-section"><div class="sim-section-title">시뮬레이션 결과</div>';
-        html += '<div class="sim-row"><span class="sim-label">예상 주간 예약</span><span class="sim-value">' + estWeeklyRes.toLocaleString() + '건</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">추천 공급대수</span><span class="sim-value" style="color:#42a5f5">' + recommendedCars + '대</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">예상 대당매출 (4주)</span><span class="sim-value" style="color:#ffb74d">' + (estRevPerCar > 0 ? estRevPerCar.toLocaleString() + '원' : '-') + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">예상 주간 예약</span><span class="sim-value">' + d.est_weekly_res.toLocaleString() + '건</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">추천 공급대수</span><span class="sim-value" style="color:#42a5f5">' + d.recommended_cars + '대</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">예상 대당매출 (4주)</span><span class="sim-value" style="color:#ffb74d">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
         html += '</div>';
 
-        if (isRecommend) {{
+        if (d.is_recommend) {{
             html += '<div class="sim-result recommend">존 개설 추천 O</div>';
         }} else {{
             var reasons = [];
-            if (recommendedCars < 1) reasons.push('추천 공급대수 부족');
-            if (estRevPerCar < 1000000 && estRevPerCar > 0) reasons.push('대당매출 100만원 미달');
-            if (estRevPerCar === 0) reasons.push('인근 실적 데이터 없음');
+            if (d.recommended_cars < 1) reasons.push('추천 공급대수 부족');
+            if (d.est_rev_per_car < 1000000 && d.est_rev_per_car > 0) reasons.push('대당매출 100만원 미달');
+            if (d.est_rev_per_car === 0) reasons.push('인근 실적 데이터 없음');
             html += '<div class="sim-result not-recommend">존 개설 추천 X</div>';
             html += '<div style="text-align:center;font-size:10px;color:#8890a4;margin-top:6px;">' + reasons.join(' · ') + '</div>';
         }}
 
         simContent.innerHTML = html;
-        simPanel.style.display = 'block';
-        simOverlay.style.display = 'block';
     }}
 }})();
 
