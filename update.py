@@ -343,14 +343,30 @@ def simulate_zone(lat, lng, radius_km=1.0):
     est_gp_per_car = round(w_gp / w_total) if w_total > 0 else 0
     avg_util = w_util / w_total if w_total > 0 else 40
 
-    # 추천 공급대수
+    # 추천 공급대수 (카니발리제이션 보정 전)
     avg_hours_per_res = 8
     target_util = min(avg_util / 100, 0.7)
     if target_util > 0:
         cars_needed = est_weekly_res * avg_hours_per_res / (168 * target_util)
     else:
         cars_needed = est_weekly_res / 3 if est_weekly_res >= 3 else (1 if est_weekly_res >= 1 else 0)
-    recommended_cars = max(0, round(cars_needed))
+    raw_recommended_cars = max(0, round(cars_needed))
+
+    # 카니발리제이션 보정: 반경 1km 내 기존 공급 차량 (거리 가중)
+    cannibal_cars = 0.0
+    nearby_total_cars = 0
+    nearby_zone_count = 0
+    for z in zones:
+        zd = ((float(z['lat']) - lat)**2 + (float(z['lng']) - lng)**2) ** 0.5 * 111
+        car_cnt = int(z.get('car_count', 0))
+        if zd <= radius_km and car_cnt > 0:
+            overlap = 1 - (zd / radius_km)  # 가까울수록 겹침 큼
+            cannibal_cars += car_cnt * overlap
+            nearby_total_cars += car_cnt
+            nearby_zone_count += 1
+
+    cannibal_cars = round(cannibal_cars, 1)
+    recommended_cars = max(0, round(raw_recommended_cars - cannibal_cars))
 
     is_recommend = recommended_cars >= 1 and est_rev_per_car >= 1000000
 
@@ -369,6 +385,10 @@ def simulate_zone(lat, lng, radius_km=1.0):
         'est_rev_per_car': est_rev_per_car,
         'est_gp_per_car': est_gp_per_car,
         'avg_util': round(avg_util, 1),
+        'raw_recommended_cars': raw_recommended_cars,
+        'cannibal_cars': cannibal_cars,
+        'nearby_total_cars': nearby_total_cars,
+        'nearby_zone_count': nearby_zone_count,
         'recommended_cars': recommended_cars,
         'is_recommend': is_recommend,
         'nearest_zone': nearest_zone.get('zone_name', '') if nearest_zone else '',
@@ -2277,9 +2297,15 @@ function showTimeline(zoneId, zoneName) {{
         left += '<div class="sim-row"><span class="sim-label">평균 가동률</span><span class="sim-value">' + (d.avg_util > 0 ? d.avg_util.toFixed(1) + '%' : '-') + '</span></div>';
         left += '</div>';
 
-        left += '<div class="sim-section"><div class="sim-section-title">시뮬레이션 결과</div>';
+        left += '<div class="sim-section"><div class="sim-section-title">카니발리제이션 보정</div>';
+        left += '<div class="sim-row"><span class="sim-label">반경 1km 기존 존</span><span class="sim-value">' + d.nearby_zone_count + '개 / ' + d.nearby_total_cars + '대</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">수요 기반 적정대수</span><span class="sim-value">' + d.raw_recommended_cars + '대</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">카니발 차감</span><span class="sim-value" style="color:#e74c3c">-' + d.cannibal_cars + '대</span></div>';
+        left += '</div>';
+
+        left += '<div class="sim-section"><div class="sim-section-title">최종 결과</div>';
         left += '<div class="sim-row"><span class="sim-label">예상 주간 예약</span><span class="sim-value">' + d.est_weekly_res.toLocaleString() + '건</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">추천 공급대수</span><span class="sim-value" style="color:#42a5f5">' + d.recommended_cars + '대</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">추천 공급대수</span><span class="sim-value" style="color:#42a5f5;font-size:15px">' + d.recommended_cars + '대</span></div>';
         left += '<div class="sim-row"><span class="sim-label">예상 대당매출 (4주)</span><span class="sim-value" style="color:#ffb74d">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
         left += '</div>';
 
@@ -2308,10 +2334,16 @@ function showTimeline(zoneId, zoneName) {{
         right += '<div class="cr-section"><div class="cr-title">4. 인근 벤치마크</div>';
         right += '<code>반경 3km</code> 내 운영 존들의 대당매출·GP·가동률을 거리 역수 가중평균으로 산출</div>';
 
-        right += '<div class="cr-section"><div class="cr-title">5. 추천 공급대수</div>';
+        right += '<div class="cr-section"><div class="cr-title">5. 수요 기반 적정대수</div>';
         right += '<code>예상 주간 예약 × 8h</code> (건당 평균) ÷ <code>168h × 목표 가동률</code><br>목표 가동률 = min(인근 평균, 70%)</div>';
 
-        right += '<div class="cr-section"><div class="cr-title">6. 추천 판정</div>';
+        right += '<div class="cr-section"><div class="cr-title">6. 카니발리제이션 보정</div>';
+        right += '<code>반경 1km</code> 내 기존 존 차량을 거리 가중 차감.<br>';
+        right += '카니발 차량 = Σ(존 차량수 × (1 - 거리/1km))<br>';
+        right += '가까울수록 수요 겹침이 크므로 차감 비중 높음.<br>';
+        right += '<b>추천대수 = 적정대수 - 카니발 차량</b></div>';
+
+        right += '<div class="cr-section"><div class="cr-title">7. 추천 판정</div>';
         right += '<span style="color:#27ae60;font-weight:700;">O</span> : 추천대수 ≥ 1대 AND 대당매출 ≥ 100만원<br>';
         right += '<span style="color:#e74c3c;font-weight:700;">X</span> : 위 조건 미충족 (사유 표시)</div>';
 
