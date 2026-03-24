@@ -1166,6 +1166,47 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 .scale-col .scale-bar {{ width: 18px; height: 120px; border-radius: 4px; }}
 .scale-col .scale-labels {{ display: flex; flex-direction: column; justify-content: space-between; height: 120px; font-size: 9px; color: #8890a4; }}
 .scale-row {{ display: flex; gap: 4px; align-items: stretch; }}
+.sim-ctx {{
+    position: absolute; z-index: 2000; background: #262b3e; border: 1px solid #3a3f55;
+    border-radius: 8px; padding: 4px 0; box-shadow: 0 4px 16px rgba(0,0,0,0.5); display: none;
+}}
+.sim-ctx-item {{
+    padding: 8px 16px; font-size: 12px; color: #c0c8e0; cursor: pointer; white-space: nowrap;
+}}
+.sim-ctx-item:hover {{ background: #303760; color: #fff; }}
+.sim-panel {{
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 2000;
+    background: #1e2233; border: 1px solid #3a3f55; border-radius: 12px;
+    padding: 24px 28px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); width: 380px;
+    display: none; color: #e0e0e0; font-size: 12px;
+}}
+.sim-panel h3 {{ font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #3a3f55; }}
+.sim-row {{ display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }}
+.sim-row .sim-label {{ color: #8890a4; font-size: 11px; }}
+.sim-row .sim-value {{ font-weight: 700; color: #fff; font-size: 13px; }}
+.sim-section {{ border-top: 1px solid #3a3f55; margin-top: 10px; padding-top: 10px; }}
+.sim-section-title {{ font-size: 10px; font-weight: 700; color: #6b7394; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }}
+.sim-result {{
+    margin-top: 14px; padding: 12px 16px; border-radius: 8px; text-align: center;
+    font-size: 14px; font-weight: 700;
+}}
+.sim-result.recommend {{ background: rgba(39,174,96,0.15); border: 1px solid #27ae60; color: #27ae60; }}
+.sim-result.not-recommend {{ background: rgba(231,76,60,0.15); border: 1px solid #e74c3c; color: #e74c3c; }}
+.sim-close {{
+    position: absolute; top: 12px; right: 14px; background: none; border: none;
+    color: #8890a4; font-size: 18px; cursor: pointer; line-height: 1;
+}}
+.sim-close:hover {{ color: #fff; }}
+.sim-overlay {{
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4);
+    z-index: 1999; display: none;
+}}
+.sim-marker-pin {{
+    width: 32px; height: 32px; border-radius: 50%; background: rgba(231,76,60,0.8);
+    border: 2px dashed #fff; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 14px; font-weight: 700; animation: sim-pulse 1.5s infinite;
+}}
+@keyframes sim-pulse {{ 0%,100% {{ box-shadow: 0 0 0 0 rgba(231,76,60,0.5); }} 50% {{ box-shadow: 0 0 0 12px rgba(231,76,60,0); }} }}
 </style>
 </head>
 <body>
@@ -1223,6 +1264,14 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         <div class="legend-item"><span class="legend-dot" style="background:#8e44ad"></span>부름우선</div>
         <div class="legend-item"><span class="legend-dot" style="background:#ff6f00"></span>그린카</div>
     </div>
+</div>
+
+<div class="sim-ctx" id="simCtx"><div class="sim-ctx-item" id="simCtxBtn">존 개설 시뮬레이션</div></div>
+<div class="sim-overlay" id="simOverlay"></div>
+<div class="sim-panel" id="simPanel">
+    <button class="sim-close" id="simClose">&times;</button>
+    <h3>존 개설 시뮬레이션</h3>
+    <div id="simContent"></div>
 </div>
 
 <div class="gap-panel" id="gapPanel">
@@ -1878,6 +1927,185 @@ function showTimeline(zoneId, zoneName) {{
     content.innerHTML = html;
     panel.style.display = 'block';
 }}
+
+// ── 존 개설 시뮬레이션 ──
+(function() {{
+    var simCtx = document.getElementById('simCtx');
+    var simPanel = document.getElementById('simPanel');
+    var simOverlay = document.getElementById('simOverlay');
+    var simContent = document.getElementById('simContent');
+    var simMarker = null;
+    var simLat, simLng;
+
+    // 경기도 전체 전환율
+    var totalAccess = accessData.reduce(function(s,d) {{ return s + d[2]; }}, 0);
+    var totalRes = resData.reduce(function(s,d) {{ return s + d[2]; }}, 0);
+    var conversionRate = totalAccess > 0 ? totalRes / totalAccess : 0;
+
+    // 거리 계산 (km)
+    function distKm(lat1, lng1, lat2, lng2) {{
+        var R = 6371;
+        var dLat = (lat2 - lat1) * Math.PI / 180;
+        var dLng = (lng2 - lng1) * Math.PI / 180;
+        var a = Math.sin(dLat/2)*Math.sin(dLat/2) +
+                Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }}
+
+    // 우클릭 → 컨텍스트 메뉴
+    map.on('contextmenu', function(e) {{
+        e.originalEvent.preventDefault();
+        simLat = e.latlng.lat;
+        simLng = e.latlng.lng;
+        var pt = map.latLngToContainerPoint(e.latlng);
+        simCtx.style.left = pt.x + 'px';
+        simCtx.style.top = pt.y + 'px';
+        simCtx.style.display = 'block';
+    }});
+
+    map.on('click', function() {{ simCtx.style.display = 'none'; }});
+    map.on('movestart', function() {{ simCtx.style.display = 'none'; }});
+
+    document.getElementById('simCtxBtn').addEventListener('click', function() {{
+        simCtx.style.display = 'none';
+        runSimulation(simLat, simLng);
+    }});
+
+    document.getElementById('simClose').addEventListener('click', closeSimPanel);
+    simOverlay.addEventListener('click', closeSimPanel);
+
+    function closeSimPanel() {{
+        simPanel.style.display = 'none';
+        simOverlay.style.display = 'none';
+        if (simMarker) {{ map.removeLayer(simMarker); simMarker = null; }}
+    }}
+
+    function runSimulation(lat, lng) {{
+        // 시뮬레이션 마커
+        if (simMarker) map.removeLayer(simMarker);
+        simMarker = L.marker([lat, lng], {{
+            icon: L.divIcon({{
+                className: 'zone-marker-wrap',
+                html: '<div class="sim-marker-pin">?</div>',
+                iconSize: [32, 32], iconAnchor: [16, 16]
+            }})
+        }}).addTo(map);
+
+        var DEMAND_RADIUS = 1.0; // km
+        var BENCH_RADIUS = 3.0; // km
+
+        // 1) 반경 내 주간 접속/예약/부름
+        var nearAccess = 0, nearRes = 0, nearDtod = 0;
+        accessData.forEach(function(d) {{
+            if (distKm(lat, lng, d[0], d[1]) <= DEMAND_RADIUS) nearAccess += d[2];
+        }});
+        resData.forEach(function(d) {{
+            if (distKm(lat, lng, d[0], d[1]) <= DEMAND_RADIUS) nearRes += d[2];
+        }});
+        dtodData.forEach(function(d) {{
+            if (distKm(lat, lng, d[0], d[1]) <= DEMAND_RADIUS) nearDtod += d[2];
+        }});
+
+        // 2) 인근 벤치마크 존 (3km)
+        var nearZones = [];
+        zonesData.forEach(function(z) {{
+            var d = distKm(lat, lng, parseFloat(z.lat), parseFloat(z.lng));
+            if (d <= BENCH_RADIUS && z.car_count > 0) {{
+                nearZones.push({{ zone: z, dist: d }});
+            }}
+        }});
+        nearZones.sort(function(a,b) {{ return a.dist - b.dist; }});
+
+        // 인근 존의 가중평균 실적 (거리 역수 가중)
+        var wRevSum = 0, wGpSum = 0, wUtilSum = 0, wTotal = 0;
+        var avgResPerCar = 0, resPerCarCount = 0;
+        nearZones.forEach(function(nz) {{
+            var z = nz.zone;
+            var w = 1 / Math.max(nz.dist, 0.1);
+            if (z.revenue_per_car_28d > 0) {{
+                wRevSum += z.revenue_per_car_28d * w;
+                wGpSum += z.gp_per_car_28d * w;
+                wUtilSum += z.utilization_rate * w;
+                wTotal += w;
+            }}
+        }});
+
+        var estRevPerCar = wTotal > 0 ? Math.round(wRevSum / wTotal) : 0;
+        var estGpPerCar = wTotal > 0 ? Math.round(wGpSum / wTotal) : 0;
+        var avgUtil = wTotal > 0 ? wUtilSum / wTotal : 40;
+
+        // 3) 추정 예약 수 (주간)
+        var estWeeklyRes = nearRes > 0 ? nearRes : Math.round(nearAccess * conversionRate);
+
+        // 4) 추천 공급대수
+        // 인근 존 기준 대당 주간 예약수 산출
+        var benchZonesWithProfit = nearZones.filter(function(nz) {{ return nz.zone.total_revenue > 0; }});
+        var nearTotalCars = 0, nearTotalAccess = 0;
+        benchZonesWithProfit.forEach(function(nz) {{ nearTotalCars += nz.zone.car_count; }});
+
+        var recommendedCars;
+        if (nearTotalCars > 0 && benchZonesWithProfit.length > 0) {{
+            // 인근 존들의 평균 대당 주간 예약 → 역산
+            // 가동률 기반: 대당 주간 가용시간 = 168h, 목표가동률 = 인근평균
+            // 예약 1건 평균 ~8h 가정
+            var avgHoursPerRes = 8;
+            var targetUtil = Math.min(avgUtil / 100, 0.7);
+            var carsNeeded = estWeeklyRes * avgHoursPerRes / (168 * targetUtil);
+            recommendedCars = Math.round(carsNeeded);
+        }} else {{
+            // 벤치마크 없으면 보수적 추정
+            recommendedCars = estWeeklyRes >= 3 ? Math.round(estWeeklyRes / 3) : (estWeeklyRes >= 1 ? 1 : 0);
+        }}
+        if (recommendedCars < 0) recommendedCars = 0;
+
+        // 5) 최근접 존
+        var nearestZone = nearZones.length > 0 ? nearZones[0] : null;
+
+        // 6) 추천 여부
+        var isRecommend = recommendedCars >= 1 && estRevPerCar >= 1000000;
+
+        // 결과 렌더링
+        var html = '';
+        html += '<div class="sim-row"><span class="sim-label">좌표</span><span class="sim-value" style="font-size:11px;font-family:monospace;">' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</span></div>';
+        if (nearestZone) {{
+            html += '<div class="sim-row"><span class="sim-label">최근접 존</span><span class="sim-value" style="font-size:11px;">' + nearestZone.zone.zone_name + ' (' + nearestZone.dist.toFixed(1) + 'km)</span></div>';
+        }}
+
+        html += '<div class="sim-section"><div class="sim-section-title">반경 1km 수요 (주간)</div>';
+        html += '<div class="sim-row"><span class="sim-label">앱 접속</span><span class="sim-value">' + nearAccess.toLocaleString() + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">예약 생성</span><span class="sim-value">' + nearRes.toLocaleString() + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">부름 호출</span><span class="sim-value">' + nearDtod.toLocaleString() + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">전환율 (경기도)</span><span class="sim-value">' + (conversionRate * 100).toFixed(2) + '%</span></div>';
+        html += '</div>';
+
+        html += '<div class="sim-section"><div class="sim-section-title">인근 벤치마크 (반경 3km, ' + nearZones.length + '개 존)</div>';
+        html += '<div class="sim-row"><span class="sim-label">평균 대당매출 (4주)</span><span class="sim-value">' + (estRevPerCar > 0 ? estRevPerCar.toLocaleString() + '원' : '-') + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">평균 대당GP (4주)</span><span class="sim-value">' + (estGpPerCar > 0 ? estGpPerCar.toLocaleString() + '원' : '-') + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">평균 가동률</span><span class="sim-value">' + (wTotal > 0 ? avgUtil.toFixed(1) + '%' : '-') + '</span></div>';
+        html += '</div>';
+
+        html += '<div class="sim-section"><div class="sim-section-title">시뮬레이션 결과</div>';
+        html += '<div class="sim-row"><span class="sim-label">예상 주간 예약</span><span class="sim-value">' + estWeeklyRes.toLocaleString() + '건</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">추천 공급대수</span><span class="sim-value" style="color:#42a5f5">' + recommendedCars + '대</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">예상 대당매출 (4주)</span><span class="sim-value" style="color:#ffb74d">' + (estRevPerCar > 0 ? estRevPerCar.toLocaleString() + '원' : '-') + '</span></div>';
+        html += '</div>';
+
+        if (isRecommend) {{
+            html += '<div class="sim-result recommend">존 개설 추천 O</div>';
+        }} else {{
+            var reasons = [];
+            if (recommendedCars < 1) reasons.push('추천 공급대수 부족');
+            if (estRevPerCar < 1000000 && estRevPerCar > 0) reasons.push('대당매출 100만원 미달');
+            if (estRevPerCar === 0) reasons.push('인근 실적 데이터 없음');
+            html += '<div class="sim-result not-recommend">존 개설 추천 X</div>';
+            html += '<div style="text-align:center;font-size:10px;color:#8890a4;margin-top:6px;">' + reasons.join(' · ') + '</div>';
+        }}
+
+        simContent.innerHTML = html;
+        simPanel.style.display = 'block';
+        simOverlay.style.display = 'block';
+    }}
+}})();
 
 // (검색 기능으로 대체됨)
 </script>
