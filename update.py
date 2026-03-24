@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 LAST_UPDATE_DEMAND_FILE = os.path.join(OUTPUT_DIR, '.last_update_demand')
 LAST_UPDATE_ZONE_FILE = os.path.join(OUTPUT_DIR, '.last_update_zone')
+NGROK_URL_FILE = os.path.join(OUTPUT_DIR, '.ngrok_url')
 
 TODAY = datetime.now().strftime("%Y-%m-%d")
 
@@ -1275,6 +1276,14 @@ def jd(data):
     return json.dumps(data, ensure_ascii=False)
 
 
+def _read_ngrok_url():
+    try:
+        with open(NGROK_URL_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ''
+
+
 def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, parking_contract=None, timeline_data=None):
     """잠재 수요 지도 HTML 생성"""
     if analysis is None:
@@ -1371,6 +1380,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 
     LAST_UPDATE_DEMAND = _read_last_update(LAST_UPDATE_DEMAND_FILE)
     LAST_UPDATE_ZONE = _read_last_update(LAST_UPDATE_ZONE_FILE)
+    ngrok_url = _read_ngrok_url()
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -2216,19 +2226,24 @@ function showTimeline(zoneId, zoneName) {{
         simPanel.style.display = 'block';
         simOverlay.style.display = 'block';
 
-        // 서버 API 호출
-        fetch('/api/simulate', {{
+        // 서버 API 호출 (로컬이면 상대경로, 외부면 ngrok URL)
+        var simApiBase = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+            ? '' : '{ngrok_url}';
+        fetch(simApiBase + '/api/simulate', {{
             method: 'POST',
             headers: {{ 'Content-Type': 'application/json' }},
             body: JSON.stringify({{ lat: lat, lng: lng, radius: 1.0 }})
         }})
-        .then(function(resp) {{ return resp.json(); }})
+        .then(function(resp) {{
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        }})
         .then(function(d) {{
             if (d.error) {{ simContent.innerHTML = '<div style="color:#e74c3c;padding:20px;text-align:center;">오류: ' + d.error + '</div>'; return; }}
             renderSimResult(d);
         }})
         .catch(function(err) {{
-            simContent.innerHTML = '<div style="color:#e74c3c;padding:20px;text-align:center;">서버 연결 실패<br><span style="font-size:10px;color:#8890a4;">로컬 서버(localhost:8080)가 실행 중인지 확인하세요</span></div>';
+            simContent.innerHTML = '<div style="color:#e74c3c;padding:20px;text-align:center;">서버 연결 실패<br><span style="font-size:10px;color:#8890a4;">시뮬레이션 서버가 실행 중인지 확인하세요</span></div>';
         }});
     }}
 
