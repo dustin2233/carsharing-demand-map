@@ -233,6 +233,28 @@ def simulate_zone(lat, lng, radius_km=1.0):
             raise RuntimeError(f"BQ error: {r.stderr[:300]}")
         return json.loads(r.stdout)
 
+    # 6) 반경 100m 내 과거 존 이력 (폐존 state=0)
+    hist_dlat = 0.1 / 111.0
+    hist_dlng = 0.1 / (111.0 * abs(math.cos(math.radians(lat))))
+    hist_sql = f"""
+    SELECT cz.id AS zone_id, cz.zone_name, cz.lat, cz.lng,
+           MIN(p.date) AS first_date, MAX(p.date) AS last_date,
+           COUNT(DISTINCT p.date) AS operation_days,
+           COUNT(DISTINCT p.car_id) AS total_cars_ever,
+           ROUND(AVG(p.revenue), 0) AS avg_daily_revenue,
+           ROUND(SUM(p.revenue) / NULLIF(COUNT(DISTINCT p.car_id), 0) * 28.0 / NULLIF(COUNT(DISTINCT p.date), 0), 0) AS revenue_per_car_28d,
+           ROUND(SUM(p.gp) / NULLIF(COUNT(DISTINCT p.car_id), 0) * 28.0 / NULLIF(COUNT(DISTINCT p.date), 0), 0) AS gp_per_car_28d,
+           ROUND(AVG(p.utilization_rate), 1) AS avg_utilization
+    FROM `socar-data.tianjin_replica.carzone_info` cz
+    JOIN `socar-data.socar_biz_profit.profit_socar_car_daily` p
+      ON p.zone_id = cz.id
+    WHERE cz.state = 0 AND cz.region1 = '경기도'
+      AND cz.lat BETWEEN {lat - hist_dlat} AND {lat + hist_dlat}
+      AND cz.lng BETWEEN {lng - hist_dlng} AND {lng + hist_dlng}
+      AND p.car_state = '운영' AND p.car_sharing_type IN ('socar', 'zplus')
+    GROUP BY 1, 2, 3, 4
+    """
+
     access_rows = bq_single(access_sql)
     res_rows = bq_single(res_sql)
     dtod_rows = bq_single(dtod_sql)
@@ -402,6 +424,40 @@ def simulate_zone(lat, lng, radius_km=1.0):
 
     is_recommend = recommended_cars >= 1 and est_rev_per_car >= 1000000
 
+    # 과거 존 이력 조회
+    hist_rows = bq_single(hist_sql)
+    hist_zones = []
+    for h in hist_rows:
+        hist_zones.append({
+            'zone_id': int(h['zone_id']),
+            'zone_name': h.get('zone_name', ''),
+            'first_date': h.get('first_date', ''),
+            'last_date': h.get('last_date', ''),
+            'operation_days': int(h.get('operation_days', 0)),
+            'total_cars_ever': int(h.get('total_cars_ever', 0)),
+            'revenue_per_car_28d': int(float(h.get('revenue_per_car_28d', 0) or 0)),
+            'gp_per_car_28d': int(float(h.get('gp_per_car_28d', 0) or 0)),
+            'avg_utilization': float(h.get('avg_utilization', 0) or 0),
+        })
+
+    # 과거 존 실적이 있으면 대당매출/추천대수에 반영 (가중 보정)
+    if hist_zones:
+        # 과거 실적의 가중평균 대당매출
+        hist_rev_sum = sum(hz['revenue_per_car_28d'] for hz in hist_zones)
+        hist_rev_avg = hist_rev_sum / len(hist_zones) if hist_zones else 0
+        # 현재 추정과 과거 실적을 7:3 비중으로 블렌딩
+        if hist_rev_avg > 0 and est_rev_per_car > 0:
+            est_rev_per_car = round(est_rev_per_car * 0.7 + hist_rev_avg * 0.3)
+        elif hist_rev_avg > 0:
+            est_rev_per_car = round(hist_rev_avg)
+        # 과거 평균 차량수 참고
+        hist_avg_cars = round(sum(hz['total_cars_ever'] for hz in hist_zones) / len(hist_zones))
+        # 추천대수도 블렌딩
+        if hist_avg_cars > 0 and recommended_cars > 0:
+            recommended_cars = math.floor(recommended_cars * 0.7 + hist_avg_cars * 0.3)
+        # 추천 판정 재계산
+        is_recommend = recommended_cars >= 1 and est_rev_per_car >= 1000000
+
     return {
         'lat': lat, 'lng': lng, 'radius_km': radius_km,
         'region2': region2, 'region3': region3,
@@ -431,6 +487,7 @@ def simulate_zone(lat, lng, radius_km=1.0):
         'is_recommend': is_recommend,
         'nearest_zone': nearest_zone.get('zone_name', '') if nearest_zone else '',
         'nearest_zone_dist_km': round(nearest_dist * 111, 1) if nearest_zone else None,
+        'hist_zones': hist_zones,
     }
 
 
@@ -2323,6 +2380,23 @@ function showTimeline(zoneId, zoneName) {{
             left += '<div class="sim-row"><span class="sim-label">최근접 존</span><span class="sim-value" style="font-size:11px;">' + d.nearest_zone + ' (' + d.nearest_zone_dist_km + 'km)</span></div>';
         }}
 
+        if (d.hist_zones && d.hist_zones.length > 0) {{
+            left += '<div class="sim-section" style="background:#2a2040;border-radius:6px;padding:8px 10px;margin-top:8px;">';
+            left += '<div class="sim-section-title" style="color:#b388ff;">과거 존 이력 (반경 100m)</div>';
+            d.hist_zones.forEach(function(hz) {{
+                left += '<div style="margin-bottom:6px;">';
+                left += '<div style="font-weight:600;color:#e0e0e0;font-size:12px;">' + hz.zone_name + '</div>';
+                left += '<div style="font-size:10px;color:#8890a4;">' + hz.first_date + ' ~ ' + hz.last_date + ' (' + hz.operation_days + '일 운영, ' + hz.total_cars_ever + '대)</div>';
+                left += '<div style="font-size:11px;margin-top:2px;">';
+                left += '<span style="color:#8890a4;">대당매출</span> <b style="color:#ffb74d;">' + (hz.revenue_per_car_28d > 0 ? hz.revenue_per_car_28d.toLocaleString() + '원' : '-') + '</b>';
+                left += ' · <span style="color:#8890a4;">대당GP</span> <b>' + (hz.gp_per_car_28d > 0 ? hz.gp_per_car_28d.toLocaleString() + '원' : '-') + '</b>';
+                left += ' · <span style="color:#8890a4;">가동률</span> <b>' + hz.avg_utilization + '%</b>';
+                left += '</div></div>';
+            }});
+            left += '<div style="font-size:9px;color:#6b7394;margin-top:4px;">※ 과거 실적 30% + 현재 추정 70% 블렌딩 반영</div>';
+            left += '</div>';
+        }}
+
         left += '<div class="sim-section"><div class="sim-section-title">반경 1km 수요 — 주간 (90일 기준)</div>';
         left += '<div class="sim-row"><span class="sim-label">앱 접속</span><span class="sim-value">' + d.weekly_access.toLocaleString() + '</span></div>';
         left += '<div class="sim-row"><span class="sim-label">예약 생성</span><span class="sim-value">' + d.weekly_res.toLocaleString() + '</span></div>';
@@ -2389,7 +2463,11 @@ function showTimeline(zoneId, zoneName) {{
         right += '가까울수록 수요 겹침이 크므로 차감 비중 높음.<br>';
         right += '<b>추천대수 = 적정대수 - 카니발 차량</b></div>';
 
-        right += '<div class="cr-section"><div class="cr-title">7. 추천 판정</div>';
+        right += '<div class="cr-section"><div class="cr-title">7. 과거 존 이력 반영</div>';
+        right += '반경 <code>100m</code> 내 과거 폐존(state=0)이 있으면 운영 당시 실적 조회.<br>';
+        right += '과거 실적 <code>30%</code> + 현재 추정 <code>70%</code>로 대당매출·추천대수 블렌딩.</div>';
+
+        right += '<div class="cr-section"><div class="cr-title">8. 추천 판정</div>';
         right += '<span style="color:#27ae60;font-weight:700;">O</span> : 추천대수 ≥ 1대 AND 대당매출 ≥ 100만원<br>';
         right += '<span style="color:#e74c3c;font-weight:700;">X</span> : 위 조건 미충족 (사유 표시)</div>';
 
