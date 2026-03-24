@@ -1422,9 +1422,19 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 .sim-panel {{
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 2000;
     background: #1e2233; border: 1px solid #3a3f55; border-radius: 12px;
-    padding: 24px 28px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); width: 380px;
+    padding: 24px 28px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); width: 740px;
     display: none; color: #e0e0e0; font-size: 12px;
 }}
+.sim-body {{ display: flex; gap: 24px; }}
+.sim-left {{ flex: 1; min-width: 0; }}
+.sim-right {{
+    width: 280px; flex-shrink: 0; background: #262b3e; border-radius: 8px; padding: 14px 16px;
+    font-size: 10px; color: #8890a4; line-height: 1.65; max-height: 420px; overflow-y: auto;
+}}
+.sim-right h4 {{ font-size: 11px; font-weight: 700; color: #c0c8e0; margin-bottom: 8px; }}
+.sim-right .cr-section {{ margin-bottom: 10px; }}
+.sim-right .cr-title {{ font-size: 10px; font-weight: 700; color: #6b7394; margin-bottom: 4px; }}
+.sim-right code {{ background: #1e2233; padding: 1px 4px; border-radius: 3px; font-size: 9px; color: #42a5f5; }}
 .sim-panel h3 {{ font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #3a3f55; }}
 .sim-row {{ display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }}
 .sim-row .sim-label {{ color: #8890a4; font-size: 11px; }}
@@ -2247,44 +2257,65 @@ function showTimeline(zoneId, zoneName) {{
     }}
 
     function renderSimResult(d) {{
-        var html = '';
-        html += '<div class="sim-row"><span class="sim-label">좌표</span><span class="sim-value" style="font-size:11px;font-family:monospace;">' + d.lat.toFixed(5) + ', ' + d.lng.toFixed(5) + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">지역</span><span class="sim-value" style="font-size:11px;">' + d.region2 + ' ' + d.region3 + '</span></div>';
+        var left = '';
+        left += '<div class="sim-row"><span class="sim-label">좌표</span><span class="sim-value" style="font-size:11px;font-family:monospace;">' + d.lat.toFixed(5) + ', ' + d.lng.toFixed(5) + '</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">지역</span><span class="sim-value" style="font-size:11px;">' + d.region2 + ' ' + d.region3 + '</span></div>';
         if (d.nearest_zone) {{
-            html += '<div class="sim-row"><span class="sim-label">최근접 존</span><span class="sim-value" style="font-size:11px;">' + d.nearest_zone + ' (' + d.nearest_zone_dist_km + 'km)</span></div>';
+            left += '<div class="sim-row"><span class="sim-label">최근접 존</span><span class="sim-value" style="font-size:11px;">' + d.nearest_zone + ' (' + d.nearest_zone_dist_km + 'km)</span></div>';
         }}
 
-        html += '<div class="sim-section"><div class="sim-section-title">반경 1km 수요 — 주간 (90일 기준)</div>';
-        html += '<div class="sim-row"><span class="sim-label">앱 접속</span><span class="sim-value">' + d.weekly_access.toLocaleString() + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">예약 생성</span><span class="sim-value">' + d.weekly_res.toLocaleString() + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">부름 호출</span><span class="sim-value">' + d.weekly_dtod.toLocaleString() + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">전환율 (' + d.conv_level + ')</span><span class="sim-value">' + (d.conv_rate * 100).toFixed(2) + '%</span></div>';
-        html += '</div>';
+        left += '<div class="sim-section"><div class="sim-section-title">반경 1km 수요 — 주간 (90일 기준)</div>';
+        left += '<div class="sim-row"><span class="sim-label">앱 접속</span><span class="sim-value">' + d.weekly_access.toLocaleString() + '</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">예약 생성</span><span class="sim-value">' + d.weekly_res.toLocaleString() + '</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">부름 호출</span><span class="sim-value">' + d.weekly_dtod.toLocaleString() + '</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">전환율 (' + d.conv_level + ')</span><span class="sim-value">' + (d.conv_rate * 100).toFixed(2) + '%</span></div>';
+        left += '</div>';
 
-        html += '<div class="sim-section"><div class="sim-section-title">인근 벤치마크 (반경 3km, ' + d.bench_zone_count + '개 존)</div>';
-        html += '<div class="sim-row"><span class="sim-label">평균 대당매출 (4주)</span><span class="sim-value">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">평균 대당GP (4주)</span><span class="sim-value">' + (d.est_gp_per_car > 0 ? d.est_gp_per_car.toLocaleString() + '원' : '-') + '</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">평균 가동률</span><span class="sim-value">' + (d.avg_util > 0 ? d.avg_util.toFixed(1) + '%' : '-') + '</span></div>';
-        html += '</div>';
+        left += '<div class="sim-section"><div class="sim-section-title">인근 벤치마크 (반경 3km, ' + d.bench_zone_count + '개 존)</div>';
+        left += '<div class="sim-row"><span class="sim-label">평균 대당매출 (4주)</span><span class="sim-value">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">평균 대당GP (4주)</span><span class="sim-value">' + (d.est_gp_per_car > 0 ? d.est_gp_per_car.toLocaleString() + '원' : '-') + '</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">평균 가동률</span><span class="sim-value">' + (d.avg_util > 0 ? d.avg_util.toFixed(1) + '%' : '-') + '</span></div>';
+        left += '</div>';
 
-        html += '<div class="sim-section"><div class="sim-section-title">시뮬레이션 결과</div>';
-        html += '<div class="sim-row"><span class="sim-label">예상 주간 예약</span><span class="sim-value">' + d.est_weekly_res.toLocaleString() + '건</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">추천 공급대수</span><span class="sim-value" style="color:#42a5f5">' + d.recommended_cars + '대</span></div>';
-        html += '<div class="sim-row"><span class="sim-label">예상 대당매출 (4주)</span><span class="sim-value" style="color:#ffb74d">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
-        html += '</div>';
+        left += '<div class="sim-section"><div class="sim-section-title">시뮬레이션 결과</div>';
+        left += '<div class="sim-row"><span class="sim-label">예상 주간 예약</span><span class="sim-value">' + d.est_weekly_res.toLocaleString() + '건</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">추천 공급대수</span><span class="sim-value" style="color:#42a5f5">' + d.recommended_cars + '대</span></div>';
+        left += '<div class="sim-row"><span class="sim-label">예상 대당매출 (4주)</span><span class="sim-value" style="color:#ffb74d">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
+        left += '</div>';
 
         if (d.is_recommend) {{
-            html += '<div class="sim-result recommend">존 개설 추천 O</div>';
+            left += '<div class="sim-result recommend">존 개설 추천 O</div>';
         }} else {{
             var reasons = [];
             if (d.recommended_cars < 1) reasons.push('추천 공급대수 부족');
             if (d.est_rev_per_car < 1000000 && d.est_rev_per_car > 0) reasons.push('대당매출 100만원 미달');
             if (d.est_rev_per_car === 0) reasons.push('인근 실적 데이터 없음');
-            html += '<div class="sim-result not-recommend">존 개설 추천 X</div>';
-            html += '<div style="text-align:center;font-size:10px;color:#8890a4;margin-top:6px;">' + reasons.join(' · ') + '</div>';
+            left += '<div class="sim-result not-recommend">존 개설 추천 X</div>';
+            left += '<div style="text-align:center;font-size:10px;color:#8890a4;margin-top:6px;">' + reasons.join(' · ') + '</div>';
         }}
 
-        simContent.innerHTML = html;
+        var right = '<h4>시뮬레이션 산출 기준</h4>';
+
+        right += '<div class="cr-section"><div class="cr-title">1. 수요 집계</div>';
+        right += '클릭 지점 <code>반경 1km</code> 내 최근 90일 앱 접속·예약·부름 건수를 BQ에서 실시간 집계 (LIMIT 없음). 주간 평균 = 총 건수 ÷ 12.86주</div>';
+
+        right += '<div class="cr-section"><div class="cr-title">2. 전환율</div>';
+        right += '해당 지점의 <code>region3</code> 전환율 우선 적용. 데이터 부족 시 <code>region2</code> → <code>경기도 전체</code> 순으로 fallback.<br>전환율 = 지역 예약건수 ÷ 지역 접속수</div>';
+
+        right += '<div class="cr-section"><div class="cr-title">3. 예상 주간 예약</div>';
+        right += '반경 1km 내 실제 예약이 있으면 그 값 사용. 없으면 <code>접속수 × 전환율</code>로 추정</div>';
+
+        right += '<div class="cr-section"><div class="cr-title">4. 인근 벤치마크</div>';
+        right += '<code>반경 3km</code> 내 운영 존들의 대당매출·GP·가동률을 거리 역수 가중평균으로 산출</div>';
+
+        right += '<div class="cr-section"><div class="cr-title">5. 추천 공급대수</div>';
+        right += '<code>예상 주간 예약 × 8h</code> (건당 평균) ÷ <code>168h × 목표 가동률</code><br>목표 가동률 = min(인근 평균, 70%)</div>';
+
+        right += '<div class="cr-section"><div class="cr-title">6. 추천 판정</div>';
+        right += '<span style="color:#27ae60;font-weight:700;">O</span> : 추천대수 ≥ 1대 AND 대당매출 ≥ 100만원<br>';
+        right += '<span style="color:#e74c3c;font-weight:700;">X</span> : 위 조건 미충족 (사유 표시)</div>';
+
+        simContent.innerHTML = '<div class="sim-body"><div class="sim-left">' + left + '</div><div class="sim-right">' + right + '</div></div>';
     }}
 }})();
 
