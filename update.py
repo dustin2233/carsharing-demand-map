@@ -161,7 +161,7 @@ NEXT_DAY = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 def run_bq(sql, max_rows=5000):
     """Execute BigQuery SQL via bq CLI and return rows."""
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", f"--max_rows={max_rows}", sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr}")
     return json.loads(result.stdout)
@@ -191,7 +191,7 @@ def query_access(team_id='gyeonggi'):
     GROUP BY 1,2 ORDER BY access_count DESC LIMIT 10000
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=10000", sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr}")
     rows = json.loads(result.stdout)
@@ -218,7 +218,7 @@ def query_reservation(team_id='gyeonggi'):
     GROUP BY 1,2 ORDER BY reservation_count DESC LIMIT 10000
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=10000", sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr}")
     rows = json.loads(result.stdout)
@@ -266,7 +266,7 @@ def query_dtod(team_id='gyeonggi'):
     LIMIT 3000
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=3000", sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr}")
     rows = json.loads(result.stdout)
@@ -296,7 +296,7 @@ def query_d2d_destinations(zone_id):
     LIMIT 200
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=200", sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr[:300]}")
     rows = json.loads(result.stdout)
@@ -470,7 +470,7 @@ def simulate_zone(lat, lng, radius_km=0.5, team_id='gyeonggi'):
     # BQ 쿼리 실행
     def bq_single(sql):
         cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=100", sql]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
         if r.returncode != 0:
             err = r.stderr[:300] or r.stdout[:300]
             raise RuntimeError(f"BQ error: {err}")
@@ -968,7 +968,7 @@ def query_reservation_timeline(team_id='gyeonggi'):
     ORDER BY ci.zone_id, r.car_id, r.start_at
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=200000", sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         print(f"  [경고] 예약 타임라인 조회 실패: {result.stderr[:200]}")
         return {}
@@ -1040,7 +1040,7 @@ def query_parking_contract(team_id='gyeonggi'):
     GROUP BY z.legacy_zone_id, pr.name, pp.settlement_type, rp.rent_price, stp.price, rp.payment_cycle
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=5000", sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr}")
     rows = json.loads(result.stdout)
@@ -1141,7 +1141,7 @@ def query_closed_zones(team_id='gyeonggi'):
     ORDER BY c.region2, c.zone_name
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=5000", sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         print(f"  [경고] 폐쇄 존 조회 실패: {result.stderr[:300] or result.stdout[:300]}")
         return []
@@ -1186,7 +1186,7 @@ def query_zone_profit(team_id='gyeonggi'):
     ORDER BY p.total_revenue DESC
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=2000", sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         print(f"  [경고] 존 실적 조회 실패: {result.stderr[:200]}")
         return {}
@@ -1395,7 +1395,7 @@ def query_weekly_trends(team_id='gyeonggi'):
     ORDER BY week, cnt DESC
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=200000", access_sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ access error: {result.stderr}")
     access_rows = json.loads(result.stdout)
@@ -1413,7 +1413,7 @@ def query_weekly_trends(team_id='gyeonggi'):
     ORDER BY cz.region2, week
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=5000", res_sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ res error: {result.stderr}")
     res_rows = json.loads(result.stdout)
@@ -1430,7 +1430,7 @@ def query_weekly_trends(team_id='gyeonggi'):
     ORDER BY region2, week
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=5000", supply_sql]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ supply error: {result.stderr}")
     supply_rows = json.loads(result.stdout)
