@@ -28,7 +28,7 @@ def get_last_update(path):
 def deploy_to_github():
     """index.html을 GitHub Pages에 배포"""
     try:
-        subprocess.run(['git', 'add', 'index.html'], cwd=DIR, capture_output=True, timeout=10)
+        subprocess.run(['git', 'add', 'index.html', '*/index.html'], cwd=DIR, capture_output=True, timeout=10)
         subprocess.run(['git', 'commit', '-m', 'update'], cwd=DIR, capture_output=True, timeout=10)
         subprocess.run(['git', 'push'], cwd=DIR, capture_output=True, timeout=30)
         print(f"[{datetime.now()}] GitHub Pages 배포 완료")
@@ -49,6 +49,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.handle_update_demand()
         elif self.path == '/api/simulate':
             self.handle_simulate()
+        elif self.path == '/api/simulate-eval':
+            self.handle_simulate_eval()
+        elif self.path == '/api/d2d-destinations':
+            self.handle_d2d_destinations()
         else:
             self.send_error(404)
 
@@ -82,12 +86,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         })
 
     def handle_update_demand(self):
-        print(f"[{datetime.now()}] 수요 업데이트 시작...")
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+        except Exception:
+            body = {}
+        team_id = body.get('team_id', 'gyeonggi')
+        print(f"[{datetime.now()}] 수요 업데이트 시작 ({team_id})...")
         try:
             result = subprocess.run(
-                ['python3', os.path.join(DIR, 'update.py'), '--demand'],
+                ['python3', os.path.join(DIR, 'update.py'), '--demand', '--team', team_id],
                 capture_output=True, text=True, timeout=600
             )
+            today = datetime.now().strftime('%Y-%m-%d %H:%M')
             if result.returncode == 0:
                 with open(LAST_UPDATE_DEMAND, 'w') as f:
                     f.write(today)
@@ -104,6 +115,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def handle_update_zone(self):
         """존/실적 업데이트 — 5분 쿨다운"""
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+        except Exception:
+            body = {}
+        team_id = body.get('team_id', 'gyeonggi')
         last = get_last_update(LAST_UPDATE_ZONE)
         if last:
             try:
@@ -118,10 +135,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return
             except ValueError:
                 pass
-        print(f"[{datetime.now()}] 존/실적 업데이트 시작...")
+        print(f"[{datetime.now()}] 존/실적 업데이트 시작 ({team_id})...")
         try:
             result = subprocess.run(
-                ['python3', os.path.join(DIR, 'update.py'), '--zone'],
+                ['python3', os.path.join(DIR, 'update.py'), '--zone', '--team', team_id],
                 capture_output=True, text=True, timeout=600
             )
             today = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -147,10 +164,43 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             lat = float(body['lat'])
             lng = float(body['lng'])
             radius = float(body.get('radius', 1.0))
-            print(f"[{datetime.now()}] 시뮬레이션: ({lat:.5f}, {lng:.5f}), 반경 {radius}km")
+            team_id = body.get('team_id', 'gyeonggi')
+            print(f"[{datetime.now()}] 시뮬레이션: ({lat:.5f}, {lng:.5f}), 반경 {radius}km, 팀: {team_id}")
 
             from update import simulate_zone
-            result = simulate_zone(lat, lng, radius)
+            result = simulate_zone(lat, lng, radius, team_id=team_id)
+            self._send_json(200, result)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._send_json(500, {'error': str(e)})
+
+    def handle_d2d_destinations(self):
+        """부름 호출 목적지 조회"""
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            zone_id = int(body['zone_id'])
+            print(f"[{datetime.now()}] 부름호출지역 조회: zone_id={zone_id}")
+
+            from update import query_d2d_destinations
+            result = query_d2d_destinations(zone_id)
+            self._send_json(200, result)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._send_json(500, {'error': str(e)})
+
+    def handle_simulate_eval(self):
+        """시뮬레이션 AI 평가 — GPT 5.2 + Claude 3.5 Sonnet"""
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            sim_data = json.loads(self.rfile.read(length)) if length else {}
+            team_id = sim_data.get('team_id', 'gyeonggi')
+            print(f"[{datetime.now()}] AI 평가 요청: {sim_data.get('region2','')} {sim_data.get('region3','')} 팀: {team_id}")
+
+            from update import evaluate_simulation_llm
+            result = evaluate_simulation_llm(sim_data, team_id=team_id)
             self._send_json(200, result)
         except Exception as e:
             import traceback

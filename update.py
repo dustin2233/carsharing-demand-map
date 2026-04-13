@@ -6,8 +6,11 @@
 index.html - 잠재 수요 지도 (앱 접속 + 예약 히트맵 + 존 마커 + Gap 분석 + 공급 분석)
 """
 
-import json, math, os, subprocess, urllib.request, time
+import json, math, os, subprocess, urllib.request, time, ssl, concurrent.futures
 from datetime import datetime, timedelta
+from shapely.geometry import Point, shape
+from shapely.ops import unary_union
+from shapely.prepared import prep
 
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 LAST_UPDATE_DEMAND_FILE = os.path.join(OUTPUT_DIR, '.last_update_demand')
@@ -15,6 +18,134 @@ LAST_UPDATE_ZONE_FILE = os.path.join(OUTPUT_DIR, '.last_update_zone')
 NGROK_URL_FILE = os.path.join(OUTPUT_DIR, '.ngrok_url')
 
 TODAY = datetime.now().strftime("%Y-%m-%d")
+
+TEAM_CONFIG = {
+    'seoul': {
+        'name': '서울사업팀',
+        'regions': ['서울특별시', '인천광역시'],
+        'center': [37.5665, 126.978], 'zoom': 11,
+        'bbox': {'lat': [37.35, 37.75], 'lng': [126.5, 127.2]},
+    },
+    'gyeonggi': {
+        'name': '경기강원사업팀',
+        'regions': ['경기도', '강원도'],
+        'center': [37.5, 127.8], 'zoom': 8,
+        'bbox': {'lat': [37.0, 38.6], 'lng': [126.4, 129.1]},
+    },
+    'chungcheong': {
+        'name': '충청사업팀',
+        'regions': ['충청남도', '충청북도', '대전광역시', '세종특별자치시'],
+        'center': [36.5, 127.0], 'zoom': 10,
+        'bbox': {'lat': [35.9, 37.1], 'lng': [126.3, 128.0]},
+    },
+    'gyeongbuk': {
+        'name': '경북사업팀',
+        'regions': ['경상북도', '대구광역시'],
+        'center': [36.0, 128.6], 'zoom': 10,
+        'bbox': {'lat': [35.5, 37.1], 'lng': [127.8, 130.0]},
+    },
+    'gyeongnam': {
+        'name': '부울경사업팀',
+        'regions': ['부산광역시', '울산광역시', '경상남도'],
+        'center': [35.2, 129.0], 'zoom': 10,
+        'bbox': {'lat': [34.5, 35.7], 'lng': [127.5, 129.5]},
+    },
+    'honam': {
+        'name': '호남사업팀',
+        'regions': ['전라남도', '전라북도', '광주광역시'],
+        'center': [35.1, 126.9], 'zoom': 10,
+        'bbox': {'lat': [34.2, 36.1], 'lng': [125.8, 127.5]},
+    },
+}
+
+# ── 행정구역 polygon 기반 좌표 필터 ──
+_PROVINCES_PATH = os.path.join(OUTPUT_DIR, 'korea_provinces.json')
+_PROVINCES_GEOJSON = None
+_TEAM_POLYGONS = {}  # {team_id: prepared polygon}
+
+def _load_provinces():
+    global _PROVINCES_GEOJSON
+    if _PROVINCES_GEOJSON is None:
+        with open(_PROVINCES_PATH) as f:
+            _PROVINCES_GEOJSON = json.load(f)
+    return _PROVINCES_GEOJSON
+
+def _get_team_polygon(team_id):
+    """팀의 regions에 해당하는 행정구역 polygon을 합쳐서 반환 (prepared)"""
+    if team_id in _TEAM_POLYGONS:
+        return _TEAM_POLYGONS[team_id]
+    provinces = _load_provinces()
+    regions = TEAM_CONFIG[team_id]['regions']
+    # region name 매핑 (강원특별자치도 → 강원도 등)
+    name_map = {
+        '강원특별자치도': '강원도', '강원도': '강원도',
+        '전북특별자치도': '전라북도',
+        '세종특별자치시': '세종특별자치시',
+    }
+    target_names = set()
+    for r in regions:
+        target_names.add(name_map.get(r, r))
+    polys = []
+    for feat in provinces['features']:
+        if feat['properties'].get('name', '') in target_names:
+            polys.append(shape(feat['geometry']))
+    if polys:
+        merged = prep(unary_union(polys))
+    else:
+        merged = None
+    _TEAM_POLYGONS[team_id] = merged
+    return merged
+
+def _calc_grid_limit(zone_count):
+    """존 수 비례 히트맵 격자 수 (존당 약 3~4개 도트)"""
+    limit = max(500, min(3000, zone_count * 3))
+    return round(limit / 100) * 100  # 100단위 반올림
+
+def filter_by_polygon(data, team_id, lat_key='lat', lng_key='lng'):
+    """행정구역 polygon 기반으로 좌표 데이터 필터링"""
+    poly = _get_team_polygon(team_id)
+    if poly is None:
+        return data
+    return [r for r in data if poly.contains(Point(float(r[lng_key]), float(r[lat_key])))]
+
+
+_REGION_ALIASES = {
+    '강원도': ['강원도', '강원특별자치도'],
+    '전북특별자치도': ['전북특별자치도', '전라북도'],
+}
+
+def _expand_regions(regions):
+    """region1 별칭 확장 (강원도 → 강원도+강원특별자치도)"""
+    expanded = []
+    for r in regions:
+        expanded.extend(_REGION_ALIASES.get(r, [r]))
+    return list(dict.fromkeys(expanded))  # 중복 제거, 순서 유지
+
+def _region1_sql(team_id, alias=''):
+    """team_id로부터 SQL IN 절 생성"""
+    regions = _expand_regions(TEAM_CONFIG[team_id]['regions'])
+    prefix = f'{alias}.' if alias else ''
+    quoted = ', '.join(f"'{r}'" for r in regions)
+    return f"{prefix}region1 IN ({quoted})"
+
+def _region1_sql_col(team_id, col='region1'):
+    """임의 컬럼명용 SQL IN 절"""
+    regions = _expand_regions(TEAM_CONFIG[team_id]['regions'])
+    quoted = ', '.join(f"'{r}'" for r in regions)
+    return f"{col} IN ({quoted})"
+
+def _team_bbox(team_id):
+    return TEAM_CONFIG[team_id]['bbox']
+
+def _team_cache_dir(team_id):
+    d = os.path.join(OUTPUT_DIR, '.cache', team_id)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def _team_output_dir(team_id):
+    d = os.path.join(OUTPUT_DIR, team_id)
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def _read_last_update(path):
@@ -27,32 +158,33 @@ THREE_MONTHS_AGO = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
 NEXT_DAY = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-def run_bq(sql):
+def run_bq(sql, max_rows=5000):
     """Execute BigQuery SQL via bq CLI and return rows."""
-    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=1000", sql]
+    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", f"--max_rows={max_rows}", sql]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr}")
     return json.loads(result.stdout)
 
 
-def query_access():
+def query_access(team_id='gyeonggi'):
     """앱 접속 위치 (광역 bounding box만, 서울/인천 제외는 Python 후처리)"""
+    bb = _team_bbox(team_id)
     sql = f"""
     WITH markers_union AS (
       SELECT location.lat AS lat, location.lng AS lng
       FROM `socar-data.socar_server_3.GET_MARKERS_V2`
       WHERE timeMs >= TIMESTAMP('{THREE_MONTHS_AGO}', 'Asia/Seoul')
         AND timeMs < TIMESTAMP('{NEXT_DAY}', 'Asia/Seoul')
-        AND location.lat BETWEEN 36.9 AND 38.1
-        AND location.lng BETWEEN 126.3 AND 127.9
+        AND location.lat BETWEEN {bb['lat'][0]} AND {bb['lat'][1]}
+        AND location.lng BETWEEN {bb['lng'][0]} AND {bb['lng'][1]}
       UNION ALL
       SELECT location.lat AS lat, location.lng AS lng
       FROM `socar-data.socar_server_3.GET_MARKERS`
       WHERE timeMs >= TIMESTAMP('{THREE_MONTHS_AGO}', 'Asia/Seoul')
         AND timeMs < TIMESTAMP('{NEXT_DAY}', 'Asia/Seoul')
-        AND location.lat BETWEEN 36.9 AND 38.1
-        AND location.lng BETWEEN 126.3 AND 127.9
+        AND location.lat BETWEEN {bb['lat'][0]} AND {bb['lat'][1]}
+        AND location.lng BETWEEN {bb['lng'][0]} AND {bb['lng'][1]}
     )
     SELECT ROUND(lat,3) AS lat, ROUND(lng,3) AS lng, COUNT(*) AS access_count
     FROM markers_union WHERE lat IS NOT NULL AND lng IS NOT NULL
@@ -70,17 +202,19 @@ def query_access():
     return rows
 
 
-def query_reservation():
+def query_reservation(team_id='gyeonggi'):
     """예약 생성 위치 (광역 bounding box만, 서울/인천 제외는 Python 후처리)"""
+    region_filter = _region1_sql(team_id)
+    bb = _team_bbox(team_id)
     sql = f"""
     SELECT ROUND(reservation_created_lat,3) AS lat, ROUND(reservation_created_lng,3) AS lng,
            COUNT(*) AS reservation_count
     FROM `socar-data.soda_store.reservation_v2`
     WHERE date >= '{THREE_MONTHS_AGO}' AND date <= '{TODAY}'
-      AND region1 = '경기도' AND state = 3 AND member_imaginary IN (0,9)
+      AND {region_filter} AND state = 3 AND member_imaginary IN (0,9)
       AND reservation_created_lat IS NOT NULL AND reservation_created_lng IS NOT NULL
-      AND reservation_created_lat BETWEEN 36.9 AND 38.1
-      AND reservation_created_lng BETWEEN 126.3 AND 127.9
+      AND reservation_created_lat BETWEEN {bb['lat'][0]} AND {bb['lat'][1]}
+      AND reservation_created_lng BETWEEN {bb['lng'][0]} AND {bb['lng'][1]}
     GROUP BY 1,2 ORDER BY reservation_count DESC LIMIT 10000
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=10000", sql]
@@ -96,15 +230,16 @@ def query_reservation():
 
 
 
-def query_reservation_by_zone_region():
+def query_reservation_by_zone_region(team_id='gyeonggi'):
     """지역 존 소속 차량의 실제 예약 건수 (예약 생성 위치가 아닌, 차량 소속 지역 기준)"""
+    cz_region_filter = _region1_sql(team_id, 'cz')
     sql = f"""
     SELECT cz.region2, COUNT(*) AS reservation_count
     FROM `socar-data.soda_store.reservation_v2` r
     JOIN `socar-data.tianjin_replica.car_info` c ON r.car_id = c.id
     JOIN `socar-data.tianjin_replica.carzone_info` cz ON c.zone_id = cz.id
     WHERE r.date >= '{THREE_MONTHS_AGO}' AND r.date <= '{TODAY}'
-      AND cz.region1 = '경기도'
+      AND {cz_region_filter}
       AND cz.state = 1 AND cz.imaginary IN (0,3,5) AND cz.visibility = 1
       AND r.state = 3
       AND r.member_imaginary IN (0,9)
@@ -114,16 +249,17 @@ def query_reservation_by_zone_region():
     return run_bq(sql)
 
 
-def query_dtod():
-    """부름 호출 위치 (경기도 영역)"""
+def query_dtod(team_id='gyeonggi'):
+    """부름 호출 위치 (팀 영역)"""
+    bb = _team_bbox(team_id)
     sql = f"""
     SELECT ROUND(d.start_lat, 4) AS lat, ROUND(d.start_lng, 4) AS lng,
            COUNT(*) AS call_count
     FROM `socar-data.tianjin_replica.reservation_dtod_info` d
     WHERE d.created_at >= TIMESTAMP('{THREE_MONTHS_AGO}', 'Asia/Seoul')
       AND d.created_at < TIMESTAMP('{NEXT_DAY}', 'Asia/Seoul')
-      AND d.start_lat BETWEEN 36.9 AND 38.1
-      AND d.start_lng BETWEEN 126.3 AND 127.9
+      AND d.start_lat BETWEEN {bb['lat'][0]} AND {bb['lat'][1]}
+      AND d.start_lng BETWEEN {bb['lng'][0]} AND {bb['lng'][1]}
       AND d.start_lat IS NOT NULL AND d.start_lng IS NOT NULL
     GROUP BY 1, 2
     ORDER BY call_count DESC
@@ -141,8 +277,113 @@ def query_dtod():
     return rows
 
 
-def simulate_zone(lat, lng, radius_km=1.0):
+SOCAR_LLM_KEY = os.environ.get('SOCAR_LLM_KEY', '')
+SOCAR_LLM_BASE = 'https://litellm.ai.socarcorp.co.kr/v1'
+
+
+def query_d2d_destinations(zone_id):
+    """해당 존에서 부름으로 호출된 위치 (최근 3개월, 예약 시점 존 기준)"""
+    sql = f"""
+    SELECT d.start_lat AS lat, d.start_lng AS lng, d.start_address1 AS address,
+           d.way, COUNT(*) AS cnt
+    FROM `socar-data.tianjin_replica.reservation_dtod_info` d
+    JOIN `socar-data.soda_store.reservation_v2` r ON r.reservation_id = d.reservation_id
+    WHERE r.zone_id = {zone_id}
+      AND r.state = 3 AND r.date >= '{THREE_MONTHS_AGO}'
+      AND d.start_lat IS NOT NULL AND d.start_lat != 0
+    GROUP BY 1, 2, 3, 4
+    ORDER BY cnt DESC
+    LIMIT 200
+    """
+    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=200", sql]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(f"BQ error: {result.stderr[:300]}")
+    rows = json.loads(result.stdout)
+    destinations = []
+    for r in rows:
+        destinations.append({
+            'lat': float(r.get('lat', 0)),
+            'lng': float(r.get('lng', 0)),
+            'address': r.get('address', ''),
+            'way': r.get('way', ''),
+            'cnt': int(r.get('cnt', 0)),
+        })
+    return {'zone_id': zone_id, 'destinations': destinations, 'total': sum(d['cnt'] for d in destinations)}
+
+def evaluate_simulation_llm(sim_data, team_id='gyeonggi'):
+    """GPT 5.2 + Claude 3.5 Sonnet 으로 존 개설 시뮬레이션 평가"""
+    from openai import OpenAI
+    client = OpenAI(base_url=SOCAR_LLM_BASE, api_key=SOCAR_LLM_KEY)
+    team_name = TEAM_CONFIG[team_id]['name']
+
+    prompt = f"""당신은 쏘카(SOCAR) 카셰어링 존 개설 전략 분석가입니다.
+아래 시뮬레이션 데이터를 분석하세요.
+
+[위치] {sim_data.get('region2','')} {sim_data.get('region3','')}
+[수요 등급] {sim_data.get('demand_grade','?')} ({team_name} 접속 격자 상위 {100-sim_data.get('demand_percentile',0):.0f}%)
+[반경 500m 주간 수요] 접속 {sim_data['weekly_access']:,} / 예약 {sim_data['weekly_res']:,} / 부름 {sim_data['weekly_dtod']:,}
+[전환율] {sim_data['conv_rate']*100:.2f}% ({sim_data['conv_level']}) — {sim_data.get('region2','')} 내 {sim_data.get('conv_total_r3',0)}개 지역 중 {sim_data.get('conv_rank','?')}위 (평균 {sim_data.get('r2_avg_conv',0):.2f}%, 최고 {sim_data.get('r2_max_conv',0):.2f}%, 최저 {sim_data.get('r2_min_conv',0):.2f}%)
+[예상 주간 예약] {sim_data['est_weekly_res']}건 (접속기반 {sim_data.get('base_res',0)} + 부름전환 {sim_data.get('dtod_additional',0)})
+[인근 벤치마크 ({sim_data['bench_zone_count']}개 존)] 대당매출 {sim_data['est_rev_per_car']:,}원/4주, 대당GP {sim_data['est_gp_per_car']:,}원/4주, 가동률 {sim_data['avg_util']:.1f}%
+[매출 추정] 건당매출 {sim_data['revenue_per_res']:,}원, 추정 월매출 {sim_data['est_monthly_revenue']:,}원
+[대당 목표매출] 1,600,000원/4주
+[수요 기반 적정대수] {sim_data['raw_recommended_cars']}대
+[카니발리제이션] 반경 500m 내 기존 {sim_data['nearby_zone_count']}개 존 {sim_data['nearby_total_cars']}대, 카니발 차감 -{sim_data['cannibal_cars']}대
+[추천 공급대수] {sim_data['recommended_cars']}대
+[최근접 존] {sim_data.get('nearest_zone','-')} ({sim_data.get('nearest_zone_dist_km','-')}km)
+[과거 존 이력] {len(sim_data.get('hist_zones',[]))}건"""
+
+    if sim_data.get('hist_zones'):
+        for hz in sim_data['hist_zones']:
+            prompt += f"\n  - {hz['zone_name']}: {hz['first_date']}~{hz['last_date']} ({hz['operation_days']}일 운영), 대당매출 {hz['revenue_per_car_28d']:,}원, GP {hz['gp_per_car_28d']:,}원, 가동률 {hz['avg_utilization']}%"
+
+    prompt += """
+
+접속량과 지역 전환율을 바탕으로 계산된 주 예약 추정 수치를 활용하여 해당 지역의 수요 포텐셜을 평가하고, 대당 매출 160만원을 목표로 건당 매출 × 주 예약 건으로 계산되는 수요 기반 적정 공급 대수, 카니발리제이션이 보정된 추천 공급대수 수치를 신뢰할 수 있는지 판단하세요. 신뢰할 수 없다면 어떤 이유에서이며 그 근거를 상세하게 기술하세요. 마지막으로 인근(반경 500m) 존의 실적과 해당 지역에서 과거 운영했던 존의 실적 등 그 외 지표를 적극 활용하여 최종 개설 여부 판단을 내려주세요.
+
+다음 형식으로 작성하세요. 첫 줄은 반드시 추천 여부로 시작하고, 각 항목 사이에 빈 줄을 넣으세요:
+개설 추천 O 또는 개설 비추천 X
+
+[1] 수요 식별: (1~2문장)
+
+[2] 추천 공급 대수 검증: (1~2문장)
+
+[3] 최종 코멘트: (1~2문장)"""
+
+    def call_model(model):
+        try:
+            max_tok = 8000 if 'gpt' in model else 800
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{'role': 'user', 'content': prompt}],
+                max_tokens=max_tok,
+                temperature=0.3,
+            )
+            content = resp.choices[0].message.content
+            return content.strip() if content else '응답 없음 (reasoning 모델 토큰 부족)'
+        except Exception as e:
+            return f'평가 실패: {e}'
+
+    # 두 모델 병렬 호출
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        gpt_future = pool.submit(call_model, 'dev/gpt-5.2-chat')
+        claude_future = pool.submit(call_model, 'prod/claude-3.5-sonnet')
+        try:
+            gpt_result = gpt_future.result(timeout=120)
+        except Exception as e:
+            gpt_result = f'평가 시간 초과'
+        try:
+            claude_result = claude_future.result(timeout=120)
+        except Exception as e:
+            claude_result = f'평가 시간 초과'
+
+    return {'gpt': gpt_result, 'claude': claude_result}
+
+
+def simulate_zone(lat, lng, radius_km=0.5, team_id='gyeonggi'):
     """존 개설 시뮬레이션 — 실시간 BQ 쿼리로 정확한 수요 산출"""
+    team_name = TEAM_CONFIG[team_id]['name']
     # 위도/경도 → 반경 변환 (대략)
     dlat = radius_km / 111.0
     dlng = radius_km / (111.0 * abs(math.cos(math.radians(lat))))
@@ -194,7 +435,7 @@ def simulate_zone(lat, lng, radius_km=1.0):
     """
 
     # 4) 해당 지역의 region2/3 파악 (가장 가까운 존 기준)
-    zones = _load_cache("zones") or []
+    zones = _load_cache("zones", team_id) or []
     nearest_zone = None
     nearest_dist = float('inf')
     for z in zones:
@@ -206,10 +447,11 @@ def simulate_zone(lat, lng, radius_km=1.0):
     region2 = nearest_zone.get('region2', '') if nearest_zone else ''
     region3 = nearest_zone.get('region3', '') if nearest_zone else ''
 
-    # 5) region3 / region2 전환율 (예약건수 기반, 접속 대비)
-    # 가벼운 쿼리: region별 예약건수 + 차량수 (접속은 캐시 활용)
+    # 5) region3 / region2 전환율 (월별 minimum 기준)
+    # 월별 예약건수 + 건당 이용시간
     conv_sql = f"""
     SELECT cz.region2, cz.region3,
+           FORMAT_DATE('%Y-%m', r.date) AS month,
            COUNT(*) AS res_cnt,
            COUNT(DISTINCT c.id) AS car_cnt,
            AVG(TIMESTAMP_DIFF(r.end_at_kst, r.start_at_kst, MINUTE) / 60.0) AS avg_hours_per_res
@@ -217,12 +459,12 @@ def simulate_zone(lat, lng, radius_km=1.0):
     JOIN `socar-data.tianjin_replica.car_info` c ON r.car_id = c.id
     JOIN `socar-data.tianjin_replica.carzone_info` cz ON c.zone_id = cz.id
     WHERE r.date >= '{THREE_MONTHS_AGO}' AND r.date <= '{TODAY}'
-      AND cz.region1 = '경기도' AND cz.state = 1
+      AND {_region1_sql(team_id, 'cz')} AND cz.state = 1
       AND cz.imaginary IN (0,3,5) AND cz.visibility = 1
       AND r.state = 3 AND r.member_imaginary IN (0,9)
       AND cz.region2 = '{region2}'
-    GROUP BY 1, 2
-    ORDER BY cz.region3
+    GROUP BY 1, 2, 3
+    ORDER BY cz.region3, month
     """
 
     # BQ 쿼리 실행
@@ -243,36 +485,39 @@ def simulate_zone(lat, lng, radius_km=1.0):
     hist_dlng = 0.3 / (111.0 * abs(math.cos(math.radians(lat))))
     hist_sql = f"""
     WITH nearby_zones AS (
-      SELECT z.legacy_zone_id AS zone_id, cz.zone_name, cz.lat, cz.lng
+      SELECT z.legacy_zone_id AS zone_id, cz.zone_name, cz.lat, cz.lng, z.type AS zone_type
       FROM `socar-data.socar_zone.zone` z
       JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
-      WHERE z.region_1 = '경기도'
-        AND z.type IN ('ZONTP_NORMAL','ZONTP_D2D_STATION','ZONTP_D2D_PRIORITY')
+      WHERE {_region1_sql_col(team_id, 'z.region_1')}
+        AND z.type IN ('ZONTP_NORMAL','ZONTP_D2D_STATION','ZONTP_D2D_PRIORITY','ZONTP_D2D_CALL')
         AND cz.lat BETWEEN {lat - hist_dlat} AND {lat + hist_dlat}
         AND cz.lng BETWEEN {lng - hist_dlng} AND {lng + hist_dlng}
     ),
     inactive_zones AS (
-      SELECT nz.zone_id, nz.zone_name, nz.lat, nz.lng
+      SELECT nz.zone_id, nz.zone_name, nz.lat, nz.lng, nz.zone_type
       FROM nearby_zones nz
       LEFT JOIN `socar-data.socar_biz_profit.profit_socar_car_daily` p
         ON nz.zone_id = p.zone_id AND p.date = CURRENT_DATE() - 1
-      GROUP BY 1, 2, 3, 4
+      GROUP BY 1, 2, 3, 4, 5
       HAVING IFNULL(SUM(p.opr_day), 0) = 0
     )
-    SELECT iz.zone_id, iz.zone_name, iz.lat, iz.lng,
+    SELECT iz.zone_id, iz.zone_name, iz.lat, iz.lng, iz.zone_type,
            MIN(p.date) AS first_date, MAX(p.date) AS last_date,
            COUNT(DISTINCT p.date) AS operation_days,
            COUNT(DISTINCT p.car_id) AS total_cars_ever,
-           ROUND(SUM(p.revenue) / NULLIF(COUNT(DISTINCT p.car_id), 0) * 28.0 / NULLIF(COUNT(DISTINCT p.date), 0), 0) AS revenue_per_car_28d,
-           ROUND(SUM(p.profit) / NULLIF(COUNT(DISTINCT p.car_id), 0) * 28.0 / NULLIF(COUNT(DISTINCT p.date), 0), 0) AS gp_per_car_28d,
-           ROUND(SAFE_DIVIDE(SUM(o.op_min), SUM(o.dp_min) - SUM(o.bl_min)) * 100, 1) AS avg_utilization
+           ROUND(SAFE_DIVIDE(SUM(p.revenue) * 28, NULLIF(SUM(p.opr_day), 0))) AS revenue_per_car_28d,
+           ROUND(SAFE_DIVIDE(SUM(p.profit) * 28, NULLIF(SUM(p.opr_day), 0))) AS gp_per_car_28d,
+           ROUND(SAFE_DIVIDE(SUM(o.op_min), SUM(o.dp_min) - SUM(o.bl_min)) * 100, 1) AS avg_utilization,
+           SUM(p.nuse) AS total_nuse,
+           ROUND(SUM(p.revenue) / NULLIF(SUM(p.nuse), 0), 0) AS revenue_per_res,
+           ROUND(SUM(p.nuse) * 1.0 / NULLIF(COUNT(DISTINCT p.date), 0) * 30, 1) AS monthly_avg_res
     FROM inactive_zones iz
     JOIN `socar-data.socar_biz_profit.profit_socar_car_daily` p
       ON p.zone_id = iz.zone_id
     LEFT JOIN `socar-data.socar_biz.operation_per_car_daily_v2` o
       ON o.zone_id = iz.zone_id AND o.date = p.date
     WHERE p.car_sharing_type IN ('socar', 'zplus')
-    GROUP BY 1, 2, 3, 4
+    GROUP BY 1, 2, 3, 4, 5
     """
 
     access_rows = bq_single(access_sql)
@@ -288,7 +533,7 @@ def simulate_zone(lat, lng, radius_km=1.0):
     weekly_dtod = round(total_dtod_90d / num_weeks)
 
     # 전환율 계산: 캐시된 접속 데이터에서 region별 접속수 집계
-    cached_access = _load_cache("access") or []
+    cached_access = _load_cache("access", team_id) or []
     # region별 접속수: 각 접속 좌표를 가장 가까운 존의 region에 배정
     region_access = {}
     for z in zones:
@@ -298,7 +543,6 @@ def simulate_zone(lat, lng, radius_km=1.0):
             region_access[r2] = {'total': 0, 'by_r3': {}}
         if r3 and r3 not in region_access[r2]['by_r3']:
             region_access[r2]['by_r3'][r3] = 0
-    # 존별 접속수를 zone의 region에 귀속 (간이 방식: 존 위치에서 가장 가까운 접속 격자)
     for a in cached_access:
         alat, alng, cnt = float(a['lat']), float(a['lng']), int(a['access_count'])
         best_d, best_r2, best_r3 = float('inf'), '', ''
@@ -315,39 +559,75 @@ def simulate_zone(lat, lng, radius_km=1.0):
             if best_r3:
                 region_access[best_r2]['by_r3'][best_r3] = region_access[best_r2]['by_r3'].get(best_r3, 0) + cnt
 
-    # 전환율 = 예약건수 / 접속수 (region3 → region2 fallback)
+    # 월별 전환율 → minimum 사용 (region3 → region2 fallback)
     conv_rows = bq_single(conv_sql)
 
-    region3_conv = None
-    region2_conv = None
-    region2_res_total = sum(int(cr.get('res_cnt', 0)) for cr in conv_rows)
+    # 월별 접속수 추정: 전체 접속을 3등분 (간이)
+    num_months = 3
     region2_access_total = region_access.get(region2, {}).get('total', 0)
+    r3_access_total = region_access.get(region2, {}).get('by_r3', {}).get(region3, 0)
+    monthly_r2_access = region2_access_total / num_months if region2_access_total > 0 else 0
+    monthly_r3_access = r3_access_total / num_months if r3_access_total > 0 else 0
 
-    if region2_access_total > 0:
-        region2_conv = region2_res_total / region2_access_total
+    # region3 월별 전환율
+    r3_monthly_convs = []
+    if monthly_r3_access > 0:
+        months_r3 = {}
+        for cr in conv_rows:
+            if cr.get('region3', '') == region3:
+                m = cr.get('month', '')
+                months_r3[m] = months_r3.get(m, 0) + int(cr.get('res_cnt', 0))
+        for m, res in months_r3.items():
+            if res > 0:
+                r3_monthly_convs.append(res / monthly_r3_access)
 
-    # region3 전환율
-    r3_access = region_access.get(region2, {}).get('by_r3', {}).get(region3, 0)
-    r3_res = 0
-    for cr in conv_rows:
-        if cr.get('region3', '') == region3:
-            r3_res = int(cr.get('res_cnt', 0))
-    if r3_access > 0 and r3_res > 0:
-        region3_conv = r3_res / r3_access
+    # region2 월별 전환율
+    r2_monthly_convs = []
+    if monthly_r2_access > 0:
+        months_r2 = {}
+        for cr in conv_rows:
+            m = cr.get('month', '')
+            months_r2[m] = months_r2.get(m, 0) + int(cr.get('res_cnt', 0))
+        for m, res in months_r2.items():
+            if res > 0:
+                r2_monthly_convs.append(res / monthly_r2_access)
 
-    # region3 전환율 우선, 없으면 region2
-    if region3_conv is not None and region3_conv > 0:
-        conv_rate = region3_conv
-        conv_level = region3
-    elif region2_conv is not None and region2_conv > 0:
-        conv_rate = region2_conv
-        conv_level = region2
+    # region3 월별 최저 전환율 우선, 없으면 region2 월별 최저
+    if r3_monthly_convs:
+        conv_rate = min(r3_monthly_convs)
+        conv_level = f'{region3} (월별 min)'
+    elif r2_monthly_convs:
+        conv_rate = min(r2_monthly_convs)
+        conv_level = f'{region2} (월별 min)'
     else:
-        # 최종 fallback: 경기도 전체
         total_gg_access = sum(v.get('total', 0) for v in region_access.values())
         total_gg_res = sum(int(cr.get('res_cnt', 0)) for cr in conv_rows)
         conv_rate = total_gg_res / total_gg_access if total_gg_access > 0 else 0
-        conv_level = '경기도'
+        conv_level = team_name
+
+    # region2 내 다른 region3들과의 전환율 비교 컨텍스트
+    r3_conv_comparison = []
+    r3_all_in_r2 = {}  # {region3: total_res}
+    for cr in conv_rows:
+        r3_name = cr.get('region3', '')
+        if r3_name:
+            r3_all_in_r2[r3_name] = r3_all_in_r2.get(r3_name, 0) + int(cr.get('res_cnt', 0))
+    r3_by_r2 = region_access.get(region2, {}).get('by_r3', {})
+    for r3_name, r3_res in r3_all_in_r2.items():
+        r3_acc = r3_by_r2.get(r3_name, 0)
+        if r3_acc > 0:
+            r3_conv_comparison.append({'region3': r3_name, 'conv': round(r3_res / r3_acc * 100, 3)})
+    r3_conv_comparison.sort(key=lambda x: -x['conv'])
+    # 해당 region3의 순위
+    conv_rank = None
+    if r3_conv_comparison:
+        for i, c in enumerate(r3_conv_comparison):
+            if c['region3'] == region3:
+                conv_rank = i + 1
+                break
+    r2_avg_conv = sum(c['conv'] for c in r3_conv_comparison) / len(r3_conv_comparison) if r3_conv_comparison else 0
+    r2_max_conv = r3_conv_comparison[0]['conv'] if r3_conv_comparison else 0
+    r2_min_conv = r3_conv_comparison[-1]['conv'] if r3_conv_comparison else 0
 
     # 건당 평균 이용시간 (region3 → region2 → 경기도 fallback)
     r3_hours = None
@@ -355,8 +635,9 @@ def simulate_zone(lat, lng, radius_km=1.0):
     for cr in conv_rows:
         h = float(cr.get('avg_hours_per_res', 0) or 0)
         if h > 0:
-            r2_hours_sum += h * int(cr.get('res_cnt', 1))
-            r2_hours_cnt += int(cr.get('res_cnt', 1))
+            cnt = int(cr.get('res_cnt', 1))
+            r2_hours_sum += h * cnt
+            r2_hours_cnt += cnt
             if cr.get('region3', '') == region3:
                 r3_hours = h
 
@@ -368,18 +649,21 @@ def simulate_zone(lat, lng, radius_km=1.0):
         hours_level = region2
     else:
         avg_hours_per_res = 8.0
-        hours_level = '경기도 (기본값)'
+        hours_level = f'{team_name} (기본값)'
 
-    # 예상 주간 예약 (접속 기반 + 부름 전환)
-    base_res = weekly_res if weekly_res > 0 else round(weekly_access * conv_rate)
+    # 예상 주간 예약 (접속 × 전환율 + 부름 전환)
+    base_res = round(weekly_access * conv_rate)
     dtod_conversion = 0.5  # 부름 호출 중 존 개설 시 일반 예약으로 전환되는 비율
     dtod_additional = round(weekly_dtod * dtod_conversion)
     est_weekly_res = base_res + dtod_additional
 
-    # 인근 존 실적 (캐시에서)
-    profit_data = _load_cache("profit") or {}
+    # 인근 존 실적 + 주차비 (캐시에서)
+    profit_data = _load_cache("profit", team_id) or {}
     if profit_data:
         profit_data = {int(k): v for k, v in profit_data.items()}
+    parking_contract = _load_cache("parking_contract", team_id) or {}
+    if parking_contract:
+        parking_contract = {int(k): v for k, v in parking_contract.items()}
 
     bench_zones = []
     bench_radius = 3.0
@@ -388,42 +672,44 @@ def simulate_zone(lat, lng, radius_km=1.0):
         if zd <= bench_radius and int(z.get('car_count', 0)) > 0:
             zid = int(z['zone_id'])
             p = profit_data.get(zid, {})
+            pc = parking_contract.get(zid, {})
             rev = p.get('revenue_per_car_28d', 0)
             gp = p.get('gp_per_car_28d', 0)
             util = p.get('utilization_rate', 0)
+            rpr = p.get('revenue_per_res', 0)
+            parking_cost = pc.get('price_per_car', 0)
             if rev > 0:
-                bench_zones.append({'dist': zd, 'rev': rev, 'gp': gp, 'util': util,
-                                    'name': z.get('zone_name', ''), 'cars': int(z['car_count'])})
+                bench_zones.append({'dist': zd, 'rev': rev, 'gp': gp, 'util': util, 'rpr': rpr,
+                                    'name': z.get('zone_name', ''), 'cars': int(z['car_count']),
+                                    'parking_cost': parking_cost, 'settlement_type': pc.get('settlement_type', '')})
 
     bench_zones.sort(key=lambda x: x['dist'])
 
     # 가중평균 실적
-    w_rev, w_gp, w_util, w_total = 0, 0, 0, 0
+    w_rev, w_gp, w_util, w_rpr, w_total = 0, 0, 0, 0, 0
     for bz in bench_zones:
         w = 1 / max(bz['dist'], 0.1)
         w_rev += bz['rev'] * w
         w_gp += bz['gp'] * w
         w_util += bz['util'] * w
+        if bz['rpr'] > 0:
+            w_rpr += bz['rpr'] * w
         w_total += w
 
     est_rev_per_car = round(w_rev / w_total) if w_total > 0 else 0
     est_gp_per_car = round(w_gp / w_total) if w_total > 0 else 0
     avg_util = w_util / w_total if w_total > 0 else 40
 
-    # 목표 가동률: 대당매출 160만원 이상 존들의 평균 가동률
-    high_perf_utils = []
-    for zid, p in profit_data.items():
-        if p.get('revenue_per_car_28d', 0) >= 1600000 and p.get('utilization_rate', 0) > 0:
-            high_perf_utils.append(p['utilization_rate'])
-    target_util_pct = sum(high_perf_utils) / len(high_perf_utils) if high_perf_utils else 50.0
-    target_util_zone_count = len(high_perf_utils)
+    # 건당 매출: SUM(revenue) / SUM(nuse) 기반 가중평균
+    TARGET_REV_PER_CAR = 1600000  # 대당 매출 목표 160만원
+    revenue_per_res = round(w_rpr / w_total) if w_total > 0 and w_rpr > 0 else 0
 
-    # 추천 공급대수 (카니발리제이션 보정 전)
-    target_util = min(target_util_pct / 100, 0.7)
-    if target_util > 0:
-        cars_needed = est_weekly_res * avg_hours_per_res / (168 * target_util)
+    # 추천 공급대수: 총 매출 추정 → 대당 160만원 기준 역산
+    est_monthly_revenue = est_weekly_res * 4 * revenue_per_res
+    if TARGET_REV_PER_CAR > 0 and revenue_per_res > 0:
+        cars_needed = est_monthly_revenue / TARGET_REV_PER_CAR
     else:
-        cars_needed = est_weekly_res / 3 if est_weekly_res >= 3 else (1 if est_weekly_res >= 1 else 0)
+        cars_needed = 0
     raw_recommended_cars = max(0, math.floor(cars_needed))
 
     # 카니발리제이션 보정: 반경 1km 내 기존 공급 차량 (거리 가중)
@@ -442,15 +728,35 @@ def simulate_zone(lat, lng, radius_km=1.0):
     cannibal_cars = round(cannibal_cars, 1)
     recommended_cars = max(0, math.floor(raw_recommended_cars - cannibal_cars))
 
-    is_recommend = recommended_cars >= 1 and est_rev_per_car >= 1000000
+    is_recommend = recommended_cars >= 1
+
+    # 수요 등급: 경기도 전체 접속 격자 대비 백분위 기반
+    all_access_counts = sorted([int(a['access_count']) for a in cached_access if int(a['access_count']) > 0])
+    if all_access_counts and total_access_90d > 0:
+        rank = sum(1 for x in all_access_counts if x <= total_access_90d)
+        percentile = rank / len(all_access_counts) * 100
+        if percentile >= 95:
+            demand_grade = 'S'
+        elif percentile >= 80:
+            demand_grade = 'A'
+        elif percentile >= 50:
+            demand_grade = 'B'
+        else:
+            demand_grade = 'F'
+    else:
+        percentile = 0
+        demand_grade = 'F'
 
     # 과거 존 이력 조회
     hist_rows = bq_single(hist_sql)
     hist_zones = []
     for h in hist_rows:
+        is_d2d_call = h.get('zone_type', '') == 'ZONTP_D2D_CALL'
         hist_zones.append({
             'zone_id': int(h['zone_id']),
             'zone_name': h.get('zone_name', ''),
+            'zone_type': h.get('zone_type', ''),
+            'is_d2d_call': is_d2d_call,
             'first_date': h.get('first_date', ''),
             'last_date': h.get('last_date', ''),
             'operation_days': int(h.get('operation_days', 0)),
@@ -458,6 +764,8 @@ def simulate_zone(lat, lng, radius_km=1.0):
             'revenue_per_car_28d': int(float(h.get('revenue_per_car_28d', 0) or 0)),
             'gp_per_car_28d': int(float(h.get('gp_per_car_28d', 0) or 0)),
             'avg_utilization': float(h.get('avg_utilization', 0) or 0),
+            'monthly_avg_res': float(h.get('monthly_avg_res', 0) or 0),
+            'revenue_per_res': int(float(h.get('revenue_per_res', 0) or 0)),
         })
 
     # 과거 존 실적이 있으면 대당매출/추천대수에 반영 (가중 보정)
@@ -470,17 +778,78 @@ def simulate_zone(lat, lng, radius_km=1.0):
             est_rev_per_car = round(est_rev_per_car * 0.7 + hist_rev_avg * 0.3)
         elif hist_rev_avg > 0:
             est_rev_per_car = round(hist_rev_avg)
-        # 과거 평균 차량수 참고
-        hist_avg_cars = round(sum(hz['total_cars_ever'] for hz in hist_zones) / len(hist_zones))
-        # 추천대수도 블렌딩
-        if hist_avg_cars > 0 and recommended_cars > 0:
-            recommended_cars = math.floor(recommended_cars * 0.7 + hist_avg_cars * 0.3)
-        # 추천 판정 재계산
-        is_recommend = recommended_cars >= 1 and est_rev_per_car >= 1000000
+        # 추천대수는 현재 수요 기반으로만 산출 (과거 차량수 블렌딩 제거)
+        is_recommend = recommended_cars >= 1
+
+    # ── 주차비 분석 ──
+    INFLATION_RATE = 0.03  # 연 3% CPI
+    def round_1000(v):
+        """천 단위 반올림"""
+        return round(v / 1000) * 1000
+
+    # 1) 인근 벤치마크 주차비
+    bench_parking_zones = [bz for bz in bench_zones if bz.get('parking_cost', 0) > 0]
+    if bench_parking_zones:
+        w_park, w_park_total = 0, 0
+        for bz in bench_parking_zones:
+            w = 1 / max(bz['dist'], 0.1)
+            w_park += bz['parking_cost'] * w
+            w_park_total += w
+        bench_avg_parking = round_1000(w_park / w_park_total) if w_park_total > 0 else 0
+    else:
+        bench_avg_parking = 0
+
+    # 2) 과거 존 주차비 (물가보정)
+    hist_parking_costs = []
+    for hz in hist_zones:
+        hpc = parking_contract.get(hz['zone_id'], {}).get('price_per_car', 0)
+        if hpc > 0:
+            # 운영 중간시점 ~ 현재까지 연수
+            try:
+                mid_date = hz.get('first_date', '')
+                last_date = hz.get('last_date', '')
+                from datetime import datetime as _dt
+                d1 = _dt.strptime(str(mid_date), '%Y-%m-%d')
+                d2 = _dt.strptime(str(last_date), '%Y-%m-%d')
+                mid = d1 + (d2 - d1) / 2
+                years = (_dt.now() - mid).days / 365.25
+            except Exception:
+                years = 2
+            adjusted = round_1000(hpc * (1 + INFLATION_RATE) ** years)
+            hist_parking_costs.append({'zone_name': hz['zone_name'], 'original': hpc, 'adjusted': adjusted, 'years': round(years, 1)})
+    hist_avg_parking = round_1000(sum(h['adjusted'] for h in hist_parking_costs) / len(hist_parking_costs)) if hist_parking_costs else 0
+
+    # 3) 추천 주차비 range
+    if bench_avg_parking > 0 and hist_avg_parking > 0:
+        parking_range_low = min(bench_avg_parking, hist_avg_parking)
+        parking_range_high = max(bench_avg_parking, hist_avg_parking)
+    elif bench_avg_parking > 0:
+        parking_range_low = round_1000(bench_avg_parking * 0.85)
+        parking_range_high = round_1000(bench_avg_parking * 1.15)
+    elif hist_avg_parking > 0:
+        parking_range_low = round_1000(hist_avg_parking * 0.85)
+        parking_range_high = round_1000(hist_avg_parking * 1.15)
+    else:
+        parking_range_low = 0
+        parking_range_high = 0
+    parking_mid = round_1000((parking_range_low + parking_range_high) / 2) if (parking_range_low + parking_range_high) > 0 else 0
+
+    # 4) GPM 시뮬레이션 (5 시나리오: -25%, -10%, 기준, +10%, +25%)
+    gpm_scenarios = []
+    if parking_mid > 0 and est_rev_per_car > 0:
+        for pct in [-0.25, -0.10, 0, 0.10, 0.25]:
+            pc = max(0, round_1000(parking_mid * (1 + pct)))
+            # GP 보정: 벤치마크 GP에서 주차비 차이만큼 조정
+            parking_diff = pc - bench_avg_parking if bench_avg_parking > 0 else 0
+            gp = est_gp_per_car - parking_diff
+            gpm = round(gp / est_rev_per_car * 100, 1) if est_rev_per_car > 0 else 0
+            gpm_scenarios.append({'parking_cost': pc, 'gp_per_car': round(gp), 'gpm': gpm, 'is_mid': pct == 0})
 
     return {
         'lat': lat, 'lng': lng, 'radius_km': radius_km,
         'region2': region2, 'region3': region3,
+        'demand_grade': demand_grade,
+        'demand_percentile': round(percentile, 1),
         'weekly_access': weekly_access,
         'weekly_res': weekly_res,
         'weekly_dtod': weekly_dtod,
@@ -488,6 +857,11 @@ def simulate_zone(lat, lng, radius_km=1.0):
         'total_res_90d': total_res_90d,
         'conv_rate': round(conv_rate, 6),
         'conv_level': conv_level,
+        'conv_rank': conv_rank,
+        'conv_total_r3': len(r3_conv_comparison),
+        'r2_avg_conv': round(r2_avg_conv, 3),
+        'r2_max_conv': round(r2_max_conv, 3),
+        'r2_min_conv': round(r2_min_conv, 3),
         'avg_hours_per_res': avg_hours_per_res,
         'hours_level': hours_level,
         'base_res': base_res,
@@ -497,8 +871,8 @@ def simulate_zone(lat, lng, radius_km=1.0):
         'est_rev_per_car': est_rev_per_car,
         'est_gp_per_car': est_gp_per_car,
         'avg_util': round(avg_util, 1),
-        'target_util': round(target_util_pct, 1),
-        'target_util_zone_count': target_util_zone_count,
+        'revenue_per_res': revenue_per_res,
+        'est_monthly_revenue': est_monthly_revenue,
         'raw_recommended_cars': raw_recommended_cars,
         'cannibal_cars': cannibal_cars,
         'nearby_total_cars': nearby_total_cars,
@@ -508,37 +882,47 @@ def simulate_zone(lat, lng, radius_km=1.0):
         'nearest_zone': nearest_zone.get('zone_name', '') if nearest_zone else '',
         'nearest_zone_dist_km': round(nearest_dist * 111, 1) if nearest_zone else None,
         'hist_zones': hist_zones,
+        'bench_avg_parking': bench_avg_parking,
+        'bench_parking_count': len(bench_parking_zones),
+        'hist_avg_parking': hist_avg_parking,
+        'hist_parking_costs': hist_parking_costs,
+        'parking_range_low': parking_range_low,
+        'parking_range_high': parking_range_high,
+        'parking_mid': parking_mid,
+        'gpm_scenarios': gpm_scenarios,
     }
 
 
-def query_zones():
+def query_zones(team_id='gyeonggi'):
     """운영 존 + 차량 대수 + 부름 가능 여부 (is_d2d_car_exportable)"""
-    sql = """
+    region_filter = _region1_sql(team_id, 'cz')
+    sql = f"""
     SELECT cz.id AS zone_id, cz.zone_name, cz.name AS parking_name,
-           cz.lat, cz.lng, cz.region2, cz.region3, cz.address,
+           cz.lat, cz.lng, cz.region1, cz.region2, cz.region3, cz.address,
            cz.is_d2d_car_exportable, cz.imaginary,
            COUNT(DISTINCT ci.id) AS car_count
     FROM `socar-data.tianjin_replica.carzone_info` cz
     LEFT JOIN `socar-data.tianjin_replica.car_info` ci
       ON cz.id = ci.zone_id AND ci.state = 5 AND ci.level = 1
-    WHERE cz.state = 1 AND cz.region1 = '경기도'
+    WHERE cz.state = 1 AND {region_filter}
       AND cz.imaginary IN (0,3,5) AND cz.visibility = 1
-    GROUP BY 1,2,3,4,5,6,7,8,9,10
+    GROUP BY 1,2,3,4,5,6,7,8,9,10,11
     HAVING NOT (cz.imaginary = 0 AND COUNT(DISTINCT ci.id) = 0)
     ORDER BY cz.region2, cz.zone_name
     """
     return run_bq(sql)
 
 
-def query_socar_supply_by_region():
+def query_socar_supply_by_region(team_id='gyeonggi'):
     """쏘카 지역별 실 운영 차량/존 수 (profit_socar_car_daily 기준, 최근 3개월)"""
+    region_filter = _region1_sql(team_id)
     sql = f"""
     SELECT
         region2,
         COUNT(DISTINCT zone_id) AS socar_zones,
         COUNT(DISTINCT car_id) AS socar_cars
     FROM `socar-data.socar_biz_profit.profit_socar_car_daily`
-    WHERE region1 = '경기도'
+    WHERE {region_filter}
       AND car_state IN ('운영', '수리')
       AND car_sharing_type IN ('socar', 'zplus')
       AND date >= '{THREE_MONTHS_AGO}' AND date <= '{TODAY}'
@@ -558,8 +942,9 @@ def query_socar_supply_by_region():
     return result
 
 
-def query_reservation_timeline():
-    """경기도 존별 차량 예약 타임라인 (±1주), state != 0 (취소 제외)"""
+def query_reservation_timeline(team_id='gyeonggi'):
+    """존별 차량 예약 타임라인 (±1주), state != 0 (취소 제외)"""
+    region_filter = _region1_sql(team_id, 'cz')
     one_week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
     one_week_later = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
     sql = f"""
@@ -575,7 +960,7 @@ def query_reservation_timeline():
     FROM `socar-data.tianjin_replica.reservation_info` r
     JOIN `socar-data.tianjin_replica.car_info` ci ON r.car_id = ci.id
     JOIN `socar-data.tianjin_replica.carzone_info` cz ON ci.zone_id = cz.id
-    WHERE cz.region1 = '경기도'
+    WHERE {region_filter}
       AND cz.state = 1 AND cz.imaginary IN (0,3,5) AND cz.visibility = 1
       AND r.state != 0
       AND r.end_at >= TIMESTAMP('{one_week_ago}', 'Asia/Seoul')
@@ -607,9 +992,10 @@ def query_reservation_timeline():
     return by_zone
 
 
-def query_parking_contract():
+def query_parking_contract(team_id='gyeonggi'):
     """존별 사업자명, 정산 방식, 대당 주차비"""
-    sql = """
+    region_filter = _region1_sql_col(team_id, 'z.region_1')
+    sql = f"""
     SELECT
         z.legacy_zone_id AS zone_id,
         pr.name AS provider_name,
@@ -650,7 +1036,7 @@ def query_parking_contract():
     WHERE z.legacy_zone_id IS NOT NULL AND z.legacy_zone_id NOT IN (0)
         AND c.business_type <> 'CTRBT_CLEANING_BUSINESS'
         AND pp.settlement_type IS NOT NULL
-        AND z.region_1 = '경기도'
+        AND {region_filter}
     GROUP BY z.legacy_zone_id, pr.name, pp.settlement_type, rp.rent_price, stp.price, rp.payment_cycle
     """
     cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=5000", sql]
@@ -669,34 +1055,117 @@ def query_parking_contract():
     return result
 
 
-def query_gcar_zones():
-    """그린카 경기도 존 현황 (gcar_info_log 최근 날짜 기준, 존별 차량수)"""
-    sql = """
-    WITH latest_cars AS (
-      SELECT zone_id, zone_name, region1, region2, lat, lng, sig_name,
-             COUNT(DISTINCT car_id) AS total_cars
-      FROM `socar-data.greencar.gcar_info_log`
-      WHERE capture_date = (SELECT MAX(capture_date) FROM `socar-data.greencar.gcar_info_log`)
-        AND region1 = '경기도'
-      GROUP BY zone_id, zone_name, region1, region2, lat, lng, sig_name
+def query_gcar_zones(team_id='gyeonggi'):
+    """그린카 존 현황 (gcar_zone_info_log 최근 스냅샷)"""
+    region_filter = _region1_sql(team_id)
+    sql = f"""
+    WITH latest AS (
+      SELECT MAX(date) AS d FROM `socar-data.greencar.gcar_zone_info_log`
+    ),
+    latest_hour AS (
+      SELECT MAX(hour) AS h FROM `socar-data.greencar.gcar_zone_info_log`
+      WHERE date = (SELECT d FROM latest)
     )
-    SELECT * FROM latest_cars ORDER BY total_cars DESC
+    SELECT zone_id, zone_name, region2, lat, lng, sig_name,
+           COALESCE(total_car_cnt, available_car_cnt, 0) AS total_cars
+    FROM `socar-data.greencar.gcar_zone_info_log`
+    WHERE date = (SELECT d FROM latest)
+      AND hour = (SELECT h FROM latest_hour)
+      AND {region_filter}
+      AND COALESCE(total_car_cnt, available_car_cnt, 0) > 0
+    ORDER BY total_cars DESC
     """
     return run_bq(sql)
 
 
-def query_zone_profit():
+def query_closed_zones(team_id='gyeonggi'):
+    """폐쇄 존 현황: 과거 운영 이력이 있으나 현재 미운영인 모든 존"""
+    z_region_filter = _region1_sql_col(team_id, 'z.region_1')
+    region_filter = _region1_sql(team_id)
+    sql = f"""
+    WITH all_zones AS (
+      SELECT z.legacy_zone_id AS zone_id, cz.zone_name, cz.name AS parking_name,
+             cz.lat, cz.lng, cz.region2, cz.region3, cz.address,
+             cz.state, cz.imaginary
+      FROM `socar-data.socar_zone.zone` z
+      JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
+      WHERE {z_region_filter}
+        AND z.type IN ('ZONTP_NORMAL','ZONTP_D2D_STATION','ZONTP_D2D_PRIORITY')
+        AND NOT REGEXP_CONTAINS(cz.zone_name, r'(매각|비즈니스|시승|장착|캐리어|캠핑카|경매|부름호출존|플랜)')
+    ),
+    active_zones AS (
+      SELECT zone_id
+      FROM `socar-data.socar_biz_profit.profit_socar_car_daily`
+      WHERE date = CURRENT_DATE() - 1
+        AND opr_day > 0
+      GROUP BY zone_id
+    ),
+    closed AS (
+      SELECT az.*
+      FROM all_zones az
+      LEFT JOIN active_zones act ON az.zone_id = act.zone_id
+      WHERE act.zone_id IS NULL
+    ),
+    hist AS (
+      SELECT zone_id,
+             MIN(date) AS first_date,
+             MAX(date) AS last_date,
+             COUNT(DISTINCT date) AS operation_days,
+             ROUND(SAFE_DIVIDE(SUM(opr_day), COUNT(DISTINCT date)), 1) AS hist_car_count,
+             ROUND(SAFE_DIVIDE(SUM(revenue)*28, NULLIF(SUM(opr_day),0))) AS revenue_per_car_28d,
+             ROUND(SAFE_DIVIDE(SUM(profit)*28, NULLIF(SUM(opr_day),0))) AS gp_per_car_28d
+      FROM `socar-data.socar_biz_profit.profit_socar_car_daily`
+      WHERE {region_filter}
+        AND car_state IN ('운영', '수리')
+        AND car_sharing_type IN ('socar', 'zplus')
+      GROUP BY zone_id
+    ),
+    util AS (
+      SELECT zone_id,
+             ROUND(SAFE_DIVIDE(SUM(op_min), SUM(dp_min) - SUM(bl_min)) * 100, 1) AS utilization_rate
+      FROM `socar-data.socar_biz.operation_per_car_daily_v2`
+      WHERE {region_filter}
+      GROUP BY zone_id
+    )
+    SELECT c.*,
+           CAST(h.first_date AS STRING) AS first_date,
+           CAST(h.last_date AS STRING) AS last_date,
+           COALESCE(h.operation_days, 0) AS operation_days,
+           COALESCE(h.hist_car_count, 0) AS hist_car_count,
+           COALESCE(h.revenue_per_car_28d, 0) AS revenue_per_car_28d,
+           COALESCE(h.gp_per_car_28d, 0) AS gp_per_car_28d,
+           COALESCE(u.utilization_rate, 0) AS utilization_rate
+    FROM closed c
+    INNER JOIN hist h ON c.zone_id = h.zone_id
+    LEFT JOIN util u ON c.zone_id = u.zone_id
+    ORDER BY c.region2, c.zone_name
+    """
+    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=5000", sql]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        print(f"  [경고] 폐쇄 존 조회 실패: {result.stderr[:300] or result.stdout[:300]}")
+        return []
+    out = result.stdout.strip()
+    if out.startswith('Error') or out.startswith('Syntax'):
+        print(f"  [경고] 폐쇄 존 조회 실패: {out[:300]}")
+        return []
+    return json.loads(out)
+
+
+def query_zone_profit(team_id='gyeonggi'):
     """존별 실적 (profit_socar_car_daily + operation_per_car_daily_v2, 최근 3개월)
     대당 매출/GP = SUM(revenue or profit) * 28 / SUM(opr_day) → 28일 기준"""
+    region_filter = _region1_sql(team_id)
     sql = f"""
     WITH profit AS (
         SELECT
             zone_id,
-            ROUND(SUM(revenue)) AS total_revenue,
+            ROUND(SAFE_DIVIDE(SUM(revenue) * 28, NULLIF(COUNT(DISTINCT date), 0))) AS total_revenue,
             ROUND(SAFE_DIVIDE(SUM(revenue) * 28, NULLIF(SUM(opr_day), 0))) AS revenue_per_car_28d,
-            ROUND(SAFE_DIVIDE(SUM(profit) * 28, NULLIF(SUM(opr_day), 0))) AS gp_per_car_28d
+            ROUND(SAFE_DIVIDE(SUM(profit) * 28, NULLIF(SUM(opr_day), 0))) AS gp_per_car_28d,
+            ROUND(SAFE_DIVIDE(SUM(revenue), NULLIF(SUM(nuse), 0))) AS revenue_per_res
         FROM `socar-data.socar_biz_profit.profit_socar_car_daily`
-        WHERE region1 = '경기도'
+        WHERE {region_filter}
             AND car_state IN ('운영', '수리')
             AND car_sharing_type IN ('socar', 'zplus')
             AND date >= '{THREE_MONTHS_AGO}' AND date <= '{TODAY}'
@@ -707,7 +1176,7 @@ def query_zone_profit():
             zone_id,
             ROUND(SAFE_DIVIDE(SUM(op_min), SUM(dp_min) - SUM(bl_min)) * 100, 1) AS utilization_rate
         FROM `socar-data.socar_biz.operation_per_car_daily_v2`
-        WHERE region1 = '경기도'
+        WHERE {region_filter}
             AND date >= '{THREE_MONTHS_AGO}' AND date <= '{TODAY}'
         GROUP BY zone_id
     )
@@ -730,6 +1199,7 @@ def query_zone_profit():
             'revenue_per_car_28d': int(float(r.get('revenue_per_car_28d', 0) or 0)),
             'gp_per_car_28d': int(float(r.get('gp_per_car_28d', 0) or 0)),
             'utilization_rate': float(r.get('utilization_rate', 0) or 0),
+            'revenue_per_res': int(float(r.get('revenue_per_res', 0) or 0)),
         }
     return profit_by_zone
 
@@ -794,8 +1264,10 @@ def is_non_gyeonggi(lat, lng):
     return is_in_seoul(lat, lng) or is_in_incheon(lat, lng)
 
 
-def filter_non_gyeonggi(data, lat_key='lat', lng_key='lng', zone_coords=None, keep_dist_km=1.0):
-    """서울+인천 데이터 제거 (히트맵용: 경기존 접경은 허용)."""
+def filter_non_gyeonggi(data, lat_key='lat', lng_key='lng', zone_coords=None, keep_dist_km=1.0, team_id='gyeonggi'):
+    """서울+인천 데이터 제거 (히트맵용: 경기존 접경은 허용). gyeonggi 이외 팀은 필터 스킵."""
+    if team_id != 'gyeonggi':
+        return data
     result = []
     for r in data:
         lat, lng = float(r[lat_key]), float(r[lng_key])
@@ -813,8 +1285,10 @@ def filter_non_gyeonggi(data, lat_key='lat', lng_key='lng', zone_coords=None, ke
     return result
 
 
-def filter_strict_gyeonggi(data, lat_key='lat', lng_key='lng'):
-    """서울+인천 철저히 제외 (GAP/공급분석용: 접경 허용 없음)."""
+def filter_strict_gyeonggi(data, lat_key='lat', lng_key='lng', team_id='gyeonggi'):
+    """서울+인천 철저히 제외 (GAP/공급분석용: 접경 허용 없음). gyeonggi 이외 팀은 필터 스킵."""
+    if team_id != 'gyeonggi':
+        return data
     return [r for r in data if not is_non_gyeonggi(float(r[lat_key]), float(r[lng_key]))]
 
 
@@ -834,13 +1308,23 @@ def _is_likely_gyeonggi(lat, lng):
     return True
 
 
-def compute_gaps(access_data, reservation_data, zones_data):
-    """앱 접속 있으나 반경 800m 내 존이 없는 지역 탐색 (서울/인천 철저 제외)"""
+def compute_gaps(access_data, reservation_data, zones_data, team_id='gyeonggi'):
+    """앱 접속 있으나 반경 800m 내 존이 없는 지역 탐색 (팀 관할 행정구역 polygon 내부만)"""
+    # 팀 관할 polygon 기반 필터 (인접 타 시도 좌표 제외)
+    team_poly = _get_team_polygon(team_id)
+
+    def _in_team(lat, lng):
+        if team_id == 'gyeonggi' and not _is_likely_gyeonggi(lat, lng):
+            return False
+        if team_poly is not None and not team_poly.contains(Point(lng, lat)):
+            return False
+        return True
+
     # BQ에서 ROUND(lat,3) 단위로 이미 그루핑됨 → 같은 키로 매칭
     access_grid = {}
     for r in access_data:
         lat, lng = float(r['lat']), float(r['lng'])
-        if not _is_likely_gyeonggi(lat, lng):
+        if not _in_team(lat, lng):
             continue
         key = f"{lat},{lng}"
         access_grid[key] = access_grid.get(key, 0) + int(r['access_count'])
@@ -848,7 +1332,7 @@ def compute_gaps(access_data, reservation_data, zones_data):
     res_grid = {}
     for r in reservation_data:
         lat, lng = float(r['lat']), float(r['lng'])
-        if not _is_likely_gyeonggi(lat, lng):
+        if not _in_team(lat, lng):
             continue
         key = f"{lat},{lng}"
         res_grid[key] = res_grid.get(key, 0) + int(r['reservation_count'])
@@ -857,7 +1341,7 @@ def compute_gaps(access_data, reservation_data, zones_data):
 
     # 접속 >= 90(3개월 누적) & 반경 800m 내 존 없는 곳 → 월평균으로 변환
     MIN_ACCESS = 90
-    MIN_DIST_KM = 0.8
+    MIN_DIST_KM = 0.3 if team_id == 'seoul' else 0.5 if team_id == 'gyeonggi' else 0.8
     num_months = 3
     gaps = []
     for key, access_count in access_grid.items():
@@ -865,7 +1349,9 @@ def compute_gaps(access_data, reservation_data, zones_data):
             continue
         lat, lng = map(float, key.split(','))
         min_dist = min(haversine_km(lat, lng, zl, zn) for zl, zn in zone_coords)
-        if min_dist > MIN_DIST_KM:
+        # 팀별 최대 거리: 서울은 존 밀도 높으므로 3km, 나머지는 10km
+        max_gap_dist = 3.0 if team_id == 'seoul' else 10.0
+        if min_dist > MIN_DIST_KM and min_dist < max_gap_dist:
             res_count = res_grid.get(key, 0)
             gaps.append({
                 'lat': lat, 'lng': lng,
@@ -878,8 +1364,11 @@ def compute_gaps(access_data, reservation_data, zones_data):
     return gaps[:50]
 
 
-def query_weekly_trends():
-    """경기도 region2별 주간 접속/예약/공급 추이 (최근 12주)"""
+def query_weekly_trends(team_id='gyeonggi'):
+    """region2별 주간 접속/예약/공급 추이 (최근 12주)"""
+    bb = _team_bbox(team_id)
+    cz_region_filter = _region1_sql(team_id, 'cz')
+    region_filter = _region1_sql(team_id)
     # 1) 접속: 주별 위치별 건수 → Python에서 region2 매핑
     access_sql = f"""
     WITH markers AS (
@@ -888,16 +1377,16 @@ def query_weekly_trends():
         FROM `socar-data.socar_server_3.GET_MARKERS_V2`
         WHERE timeMs >= TIMESTAMP('{THREE_MONTHS_AGO}', 'Asia/Seoul')
           AND timeMs < TIMESTAMP('{NEXT_DAY}', 'Asia/Seoul')
-          AND location.lat BETWEEN 36.9 AND 38.1
-          AND location.lng BETWEEN 126.3 AND 127.9
+          AND location.lat BETWEEN {bb['lat'][0]} AND {bb['lat'][1]}
+          AND location.lng BETWEEN {bb['lng'][0]} AND {bb['lng'][1]}
         UNION ALL
         SELECT DATE(timeMs, 'Asia/Seoul') AS dt,
             ROUND(location.lat, 2) AS lat, ROUND(location.lng, 2) AS lng
         FROM `socar-data.socar_server_3.GET_MARKERS`
         WHERE timeMs >= TIMESTAMP('{THREE_MONTHS_AGO}', 'Asia/Seoul')
           AND timeMs < TIMESTAMP('{NEXT_DAY}', 'Asia/Seoul')
-          AND location.lat BETWEEN 36.9 AND 38.1
-          AND location.lng BETWEEN 126.3 AND 127.9
+          AND location.lat BETWEEN {bb['lat'][0]} AND {bb['lat'][1]}
+          AND location.lng BETWEEN {bb['lng'][0]} AND {bb['lng'][1]}
     )
     SELECT FORMAT_DATE('%G-W%V', dt) AS week, lat, lng, COUNT(*) AS cnt
     FROM markers
@@ -919,7 +1408,7 @@ def query_weekly_trends():
     JOIN `socar-data.tianjin_replica.carzone_info` cz ON r.zone_id = cz.id
     WHERE r.date >= '{THREE_MONTHS_AGO}' AND r.date <= '{TODAY}'
       AND r.state = 3 AND r.member_imaginary IN (0,9)
-      AND cz.region1 = '경기도'
+      AND {cz_region_filter}
     GROUP BY week, cz.region2
     ORDER BY cz.region2, week
     """
@@ -934,7 +1423,7 @@ def query_weekly_trends():
     SELECT FORMAT_DATE('%G-W%V', date) AS week, region2,
         COUNT(DISTINCT car_id) AS car_cnt
     FROM `socar-data.socar_biz_profit.profit_socar_car_daily`
-    WHERE region1 = '경기도' AND car_state IN ('운영', '수리')
+    WHERE {region_filter} AND car_state IN ('운영', '수리')
       AND car_sharing_type IN ('socar', 'zplus')
       AND date >= '{THREE_MONTHS_AGO}' AND date <= '{TODAY}'
     GROUP BY week, region2
@@ -988,8 +1477,17 @@ def _half_change(vals):
     return round((second_half - first_half) / first_half * 100, 1)
 
 
-def compute_growth_analysis(weekly_data, zones_data=None):
+def compute_growth_analysis(weekly_data, zones_data=None, team_name=''):
     """주간 추이 데이터로 성장 지역 분석 + 공급 분류"""
+    total_label = (team_name + ' 전체') if team_name else '경기강원팀 전체'
+    # region2 → region1 매핑
+    r2_to_r1 = {}
+    if zones_data:
+        for z in zones_data:
+            r1 = z.get('region1', '')
+            r2 = z.get('region2', '').replace('\u3000', ' ')
+            if r2 and r1:
+                r2_to_r1[r2] = r1
     # 접속 데이터 → region2 매핑
     if zones_data and isinstance(weekly_data, dict) and 'access' in weekly_data:
         access_by_wr = _assign_access_to_region(weekly_data['access'], zones_data)
@@ -1082,6 +1580,8 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         while access_vals and access_vals[0] == 0:
             access_vals.pop(0); res_vals.pop(0) if res_vals else None; car_vals.pop(0) if car_vals else None
 
+        if not access_vals or not res_vals:
+            continue
         avg_access = sum(access_vals) / len(access_vals)
         avg_res = sum(res_vals) / len(res_vals)
         avg_cars = sum(car_vals) / len(car_vals) if car_vals else 0
@@ -1098,6 +1598,7 @@ def compute_growth_analysis(weekly_data, zones_data=None):
 
         row = {
             'region2': rg,
+            'region1': r2_to_r1.get(rg, ''),
             'access_weekly': access_weekly,
             'res_weekly': res_weekly,
             'cars': cars_current,
@@ -1109,8 +1610,8 @@ def compute_growth_analysis(weekly_data, zones_data=None):
             'car_trend': [round(v, 3) for v in car_share],
         }
 
-        if res_growth > 0:
-            # 수요 성장: 공급 분류
+        if access_growth > 0:
+            # 수요 성장 (접속 점유율 증가): 공급 분류
             if car_growth < -1:
                 row['status'] = '점검 필요'
             elif car_growth > 1:
@@ -1119,7 +1620,7 @@ def compute_growth_analysis(weekly_data, zones_data=None):
                 row['status'] = '증차 검토'
             analysis.append(row)
         else:
-            # 수요 감소: 공급 분류 (반대 방향)
+            # 수요 감소 (접속 점유율 감소): 공급 분류
             if car_growth > 1:
                 row['status'] = '점검 필요'
             elif car_growth < -1:
@@ -1146,7 +1647,7 @@ def compute_growth_analysis(weekly_data, zones_data=None):
     gg_cars_current = gg_car_vals[-1] if gg_car_vals else 0
 
     gg_total_row = {
-        'region2': '경기도 전체',
+        'region2': total_label,
         'access_weekly': round(gg_avg_access),
         'res_weekly': round(gg_avg_res),
         'cars': gg_cars_current,
@@ -1159,13 +1660,11 @@ def compute_growth_analysis(weekly_data, zones_data=None):
         'car_trend': gg_car_vals,
     }
 
-    # 성장: 점검 필요 > 증차 검토 > 대응 진행 중 순, 같은 그룹 내에선 예약 성장률 높은 순
-    status_order_growth = {'점검 필요': 0, '증차 검토': 1, '대응 진행 중': 2}
-    analysis.sort(key=lambda x: (status_order_growth.get(x['status'], 9), -x['res_growth']))
+    # 성장: 예약 점유율 상승 가파른 순 (내림차순)
+    analysis.sort(key=lambda x: -x['res_growth'])
 
-    # 감소: 점검 필요 > 감차 검토 > 대응 진행 중 순, 같은 그룹 내에선 예약 감소율 큰 순
-    status_order_decline = {'점검 필요': 0, '감차 검토': 1, '대응 진행 중': 2}
-    decline.sort(key=lambda x: (status_order_decline.get(x['status'], 9), x['res_growth']))
+    # 감소: 예약 점유율 하락 가파른 순 (오름차순 = 가장 큰 음수부터)
+    decline.sort(key=lambda x: x['res_growth'])
 
     # 경기도 전체를 첫 번째 요소로 삽입
     analysis.insert(0, gg_total_row)
@@ -1173,7 +1672,7 @@ def compute_growth_analysis(weekly_data, zones_data=None):
     return {'growth': analysis, 'decline': decline}
 
 
-def reverse_geocode(gaps):
+def reverse_geocode(gaps, team_id='gyeonggi', zones_data=None):
     """Nominatim 역지오코딩으로 한글 주소 변환"""
     gg_cities = ['수원','성남','용인','부천','안산','안양','남양주','화성','평택','의정부',
                  '시흥','파주','김포','광명','광주','군포','하남','오산','이천','양주',
@@ -1184,8 +1683,11 @@ def reverse_geocode(gaps):
     for g in gaps:
         url = f"https://nominatim.openstreetmap.org/reverse?lat={g['lat']}&lon={g['lng']}&format=json&accept-language=ko&zoom=16"
         req = urllib.request.Request(url, headers={'User-Agent': 'socar-demand-map/1.0'})
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
                 data = json.loads(resp.read())
                 addr = data.get('address', {})
                 city = addr.get('city', addr.get('county', addr.get('town', '')))
@@ -1196,12 +1698,46 @@ def reverse_geocode(gaps):
                 name = ' '.join(parts) if parts else f"({g['lat']:.3f}, {g['lng']:.3f})"
         except Exception:
             name = f"({g['lat']:.3f}, {g['lng']:.3f})"
+            addr = {}
 
+        # 팀 소속 지역인지 확인
         province = addr.get('province', addr.get('state', ''))
-        is_gg = '경기' in province or any(c in name for c in gg_cities)
-        is_non = any(c in name for c in non_gg)
-        if is_gg and not is_non:
-            results.append({**g, 'name': name})
+        city = addr.get('city', addr.get('county', addr.get('town', '')))
+        team_regions = TEAM_CONFIG[team_id]['regions']
+        team_keywords = []
+        for r in team_regions:
+            for suffix in ['특별시','광역시','특별자치도','특별자치시','도']:
+                if r.endswith(suffix):
+                    team_keywords.append(r[:-len(suffix)])
+                    break
+            else:
+                team_keywords.append(r[:2])
+
+        # province 또는 city에서 팀 키워드 매칭
+        check_str = (province or '') + ' ' + (city or '')
+        is_team = any(kw in check_str for kw in team_keywords)
+        # province/city 정보 없으면 bbox로 판단 (서울은 경기와 겹치므로 제외)
+        if not is_team and not check_str.strip() and team_id != 'seoul':
+            is_team = True
+        # province 없고 다른 팀에도 매칭 안 되면 bbox 내 포함 (서울 제외)
+        if not is_team and team_id != 'seoul':
+            other_kws = []
+            for tid, cfg in TEAM_CONFIG.items():
+                if tid == team_id: continue
+                for r in cfg['regions']:
+                    for sfx in ['특별시','광역시','특별자치도','특별자치시','도']:
+                        if r.endswith(sfx): other_kws.append(r[:-len(sfx)]); break
+            if check_str.strip() and not any(kw in check_str for kw in other_kws):
+                is_team = True
+        if is_team:
+            # region1 추출: province 또는 city에서 팀 region 매칭
+            gap_region1 = ''
+            for r in team_regions:
+                kw = r.replace('특별시','').replace('광역시','').replace('특별자치도','').replace('특별자치시','').replace('도','')
+                if kw in (province or '') or kw in (city or ''):
+                    gap_region1 = r
+                    break
+            results.append({**g, 'name': name, 'region1': gap_region1})
         time.sleep(1.1)
 
     return results
@@ -1219,131 +1755,163 @@ LEAFLET_CDN = """
 """
 
 SHARED_STYLES = """
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1e2e; color: #e0e0e0; }
-#map { position: absolute; top: 0; left: 240px; right: 0; bottom: 0; z-index: 0; }
+body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f4f5f7; color: #1a1a1a; }
+#map { position: absolute; top: 0; left: 260px; right: 0; bottom: 0; z-index: 0; }
 .sidebar {
-    position: fixed; top: 0; left: 0; bottom: 0; width: 240px; z-index: 1001;
-    background: #1e2233; overflow-y: auto; display: flex; flex-direction: column;
-    border-right: 1px solid #2a2f45;
+    position: fixed; top: 0; left: 0; bottom: 0; width: 260px; z-index: 1001;
+    background: #ffffff; overflow-y: auto; display: flex; flex-direction: column;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.06);
 }
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: #d0d5dd; border-radius: 4px; }
 .sidebar-header {
-    padding: 16px 14px 10px; border-bottom: 1px solid #2a2f45;
+    padding: 20px 16px 14px;
+    border-bottom: 1px solid #f0f1f3;
 }
-.sidebar-header h1 { font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 6px; }
-.sidebar-header .date { font-size: 10px; color: #8890a4; line-height: 1.5; }
+.sidebar-header h1 {
+    font-size: 15px; font-weight: 800; color: #1a1a1a; margin-bottom: 6px;
+    letter-spacing: -0.3px; display: flex; align-items: center; gap: 8px;
+}
+.sidebar-header h1 img.socar-logo {
+    width: 22px; height: 22px; flex-shrink: 0; object-fit: contain;
+}
+.sidebar-header .date { font-size: 11px; color: #8b95a5; line-height: 1.6; }
 .stat-row {
-    display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 14px;
-    border-bottom: 1px solid #2a2f45;
+    display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 16px;
+    border-bottom: 1px solid #f0f1f3;
 }
 .stat-card {
     display: flex; flex-direction: column; align-items: center;
-    background: #323850; border-radius: 5px; padding: 5px 8px; flex: 1; min-width: 65px;
+    background: #f7f8fa; border: none;
+    border-radius: 10px; padding: 8px 8px; flex: 1; min-width: 65px;
+    transition: all 0.2s;
 }
-.stat-card .label { font-size: 9px; color: #8890a4; white-space: nowrap; margin-bottom: 1px; }
-.stat-card .value { font-size: 13px; font-weight: 700; color: #fff; }
-.stat-card.socar .label { color: #42a5f5; }
-.stat-card.gcar .label { color: #ffb74d; }
+.stat-card:hover { background: #eef0f4; }
+.stat-card .label { font-size: 9px; color: #8b95a5; white-space: nowrap; margin-bottom: 2px; font-weight: 600; }
+.stat-card .value { font-size: 14px; font-weight: 800; color: #1a1a1a; letter-spacing: -0.3px; }
+.stat-card.socar .label { color: #0064FF; }
+.stat-card.socar { background: #f0f4ff; }
+.stat-card.socar .value { color: #0064FF; }
+.stat-card.gcar .label { color: #ff8c00; }
+.stat-card.gcar { background: #fff7ed; }
+.stat-card.gcar .value { color: #e07800; }
 .sidebar-section {
-    padding: 10px 14px 6px; border-bottom: 1px solid #2a2f45;
+    padding: 14px 16px 8px; border-bottom: 1px solid #f0f1f3;
 }
 .sidebar-section-title {
-    font-size: 9px; font-weight: 700; color: #6b7394; text-transform: uppercase;
-    letter-spacing: 1px; margin-bottom: 6px;
+    font-size: 10px; font-weight: 700; color: #8b95a5; text-transform: uppercase;
+    letter-spacing: 1px; margin-bottom: 8px;
 }
 .sidebar-section select {
-    width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid #3a3f55;
-    background: #262b3e; color: #e0e0e0; font-size: 12px; cursor: pointer;
-    margin-bottom: 4px;
+    width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid #e8eaed;
+    background: #f7f8fa; color: #1a1a1a; font-size: 12px; cursor: pointer;
+    margin-bottom: 4px; transition: all 0.2s; font-weight: 500;
 }
-.sidebar-section select:focus { outline: none; border-color: #5b6abf; }
+.sidebar-section select:focus { outline: none; border-color: #0064FF; box-shadow: 0 0 0 3px rgba(0,100,255,0.1); }
 .sidebar-btn {
     display: flex; align-items: center; gap: 8px; width: 100%;
-    padding: 7px 10px; margin-bottom: 3px; border-radius: 6px; border: none;
-    background: transparent; color: #c0c8e0; font-size: 12px; cursor: pointer;
-    transition: background 0.15s;
-    text-align: left;
+    padding: 9px 10px; margin-bottom: 2px; border-radius: 10px; border: none;
+    background: transparent; color: #5a6270; font-size: 12px; cursor: pointer;
+    transition: all 0.15s; text-align: left; font-weight: 600;
 }
-.sidebar-btn:hover { background: #2a3050; }
-.sidebar-btn.active { background: #303760; color: #fff; }
+.sidebar-btn:hover { background: #f4f5f7; color: #1a1a1a; }
+.sidebar-btn.active { background: #0064FF; color: #fff; }
 .sidebar-btn .dot {
     width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
 }
+.sidebar-btn.active .dot { box-shadow: 0 0 0 2px rgba(255,255,255,0.4); }
 .update-btn {
     display: flex; align-items: center; gap: 6px; width: 100%;
-    padding: 8px 10px; margin-bottom: 3px; border-radius: 6px;
-    border: 1px solid #3a3f55; background: #262b3e; color: #c0c8e0;
-    font-size: 11px; cursor: pointer; transition: all 0.2s;
+    padding: 10px 12px; margin-bottom: 4px; border-radius: 10px;
+    border: none; background: #f7f8fa; color: #5a6270;
+    font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s;
 }
-.update-btn:hover { background: #3a4060; color: #fff; border-color: #5b6abf; }
-.update-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.update-btn:hover { background: #0064FF; color: #fff; }
+.update-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .update-btn.updating { animation: pulse 1.5s infinite; }
-.update-time { font-size: 9px; color: #6b7394; padding: 1px 10px 4px; }
-.analysis-tab { padding: 5px 14px; border-radius: 4px; border: 1px solid #3a3f55; background: #262b3e; color: #8890a4; font-size: 11px; cursor: pointer; transition: all 0.2s; }
-.analysis-tab:hover { background: #3a4060; color: #fff; }
-.analysis-tab.active { background: #3a4060; color: #fff; border-color: #5b6abf; }
-@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+.update-time { font-size: 9px; color: #b0b8c4; padding: 2px 12px 4px; }
+.analysis-tab { padding: 6px 14px; border-radius: 8px; border: 1px solid #e8eaed; background: #fff; color: #5a6270; font-size: 11px; cursor: pointer; transition: all 0.2s; font-weight: 600; }
+.analysis-tab:hover { background: #f4f5f7; color: #1a1a1a; }
+.analysis-tab.active { background: #0064FF; color: #fff; border-color: #0064FF; }
+.search-tab { background: transparent; color: #8b95a5; }
+.search-tab.active { background: #ffffff; color: #1a1a1a; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+.search-tab:hover:not(.active) { color: #5a6270; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
 .legend-row {
-    display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px;
-    border-top: 1px solid #2a2f45; margin-top: auto;
+    display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px;
+    border-top: 1px solid #f0f1f3; margin-top: auto;
+    background: #fafbfc;
 }
-.legend-item { display: flex; align-items: center; gap: 4px; font-size: 9px; color: #8890a4; }
+.legend-item { display: flex; align-items: center; gap: 4px; font-size: 9px; color: #8b95a5; font-weight: 600; }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .gap-panel {
     position: fixed; top: 10px; right: 14px; z-index: 1000;
-    background: rgba(30,34,51,0.96); border-radius: 10px;
-    padding: 14px 16px; box-shadow: 0 2px 16px rgba(0,0,0,0.4);
-    max-height: calc(100vh - 30px); overflow-y: auto; width: 320px;
-    display: none; font-size: 12px; color: #e0e0e0;
-    border: 1px solid #2a2f45;
+    background: #ffffff; border-radius: 16px;
+    padding: 18px 20px; box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+    max-height: calc(100vh - 30px); overflow-y: auto; width: 340px;
+    display: none; font-size: 12px; color: #1a1a1a;
 }
-.gap-panel h3 { font-size: 14px; margin-bottom: 8px; color: #fff; }
+.gap-panel h3 { font-size: 15px; margin-bottom: 10px; color: #1a1a1a; font-weight: 800; }
 .gap-panel .gap-row {
-    display: flex; justify-content: space-between; padding: 5px 0;
-    border-bottom: 1px solid #2a2f45; cursor: pointer;
+    display: flex; justify-content: space-between; padding: 8px 6px;
+    border-bottom: 1px solid #f0f1f3; cursor: pointer;
+    border-radius: 6px; transition: all 0.15s;
 }
-.gap-panel .gap-row:hover { background: #262b3e; }
-.gap-panel .gap-name { color: #e0e0e0; flex: 1; }
-.gap-panel .gap-cnt { color: #ffb74d; font-weight: 600; min-width: 70px; text-align: right; }
-.gap-panel table { color: #e0e0e0; }
-.gap-panel th { color: #8890a4; }
-.gap-panel td { color: #e0e0e0; }
-.leaflet-popup-content-wrapper { border-radius: 10px; background: #262b3e; color: #e0e0e0; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
-.leaflet-popup-tip { background: #262b3e; }
+.gap-panel .gap-row:hover { background: #f4f5f7; }
+.ms-row:hover { background: #f0f4ff !important; }
+.gap-panel .gap-name { color: #1a1a1a; flex: 1; font-weight: 500; }
+.gap-panel .gap-cnt { color: #0064FF; font-weight: 700; min-width: 70px; text-align: right; }
+.gap-panel table { color: #1a1a1a; }
+.gap-panel th { color: #8b95a5; font-weight: 600; }
+.gap-panel td { color: #1a1a1a; }
+.leaflet-popup-content-wrapper {
+    border-radius: 16px; background: #ffffff; color: #1a1a1a;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+}
+.leaflet-popup-tip { background: #ffffff; }
 .leaflet-popup-content { font-size: 12px; line-height: 1.7; min-width: 220px; }
-.popup-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; padding-bottom: 6px; color: #fff; border-bottom: 1px solid #3a3f55; }
-.popup-row { display: flex; gap: 6px; align-items: center; padding: 1px 0; }
-.popup-label { color: #8890a4; min-width: 72px; font-size: 11px; flex-shrink: 0; }
-.popup-section { border-top: 1px solid #3a3f55; margin-top: 6px; padding-top: 6px; }
-.popup-section-title { font-weight: 600; font-size: 11px; color: #6b7394; margin-bottom: 4px; }
+.popup-title {
+    font-weight: 800; font-size: 15px; margin-bottom: 8px; padding-bottom: 8px;
+    color: #1a1a1a; border-bottom: 2px solid #e8eaed;
+}
+.popup-row { display: flex; gap: 6px; align-items: center; padding: 2px 0; }
+.popup-label { color: #8b95a5; min-width: 72px; font-size: 11px; flex-shrink: 0; font-weight: 600; }
+.popup-section { border-top: 2px solid #e8eaed; margin-top: 8px; padding-top: 8px; }
+.popup-section-title { font-weight: 700; font-size: 11px; color: #0064FF; margin-bottom: 5px; }
 .popup-badge {
-    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    display: inline-block; padding: 2px 10px; border-radius: 10px;
     font-size: 11px; font-weight: 600; color: #fff;
 }
 .heatmap-scale {
     position: fixed; bottom: 24px; right: 14px; z-index: 1000;
-    display: flex; gap: 10px; background: rgba(30,34,51,0.95);
-    border-radius: 10px; padding: 10px 14px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3); font-size: 11px;
-    border: 1px solid #2a2f45; color: #e0e0e0;
+    display: flex; gap: 10px; background: #ffffff;
+    border-radius: 14px; padding: 12px 16px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1); font-size: 11px;
+    color: #1a1a1a;
 }
 """
 
 TILE_SETUP = """
+    var cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; CartoDB', maxZoom: 19, subdomains: 'abcd'
+    });
+    var cartoVoyager = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; CartoDB', maxZoom: 19, subdomains: 'abcd'
+    });
     var vworldTile = L.tileLayer('https://xdworld.vworld.kr/2d/Base/service/{z}/{x}/{y}.png', {
         attribution: 'VWorld', maxZoom: 19
     });
-    var osmTile = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors', maxZoom: 19
-    });
-    var baseTile = vworldTile;
-    baseTile.on('tileerror', function() { map.removeLayer(vworldTile); osmTile.addTo(map); });
-    baseTile.addTo(map);
+    var baseLayers = { 'VWorld': vworldTile, '일반': cartoVoyager, '다크': cartoDark };
+    vworldTile.addTo(map);
+    L.control.layers(baseLayers, null, { position: 'bottomright', collapsed: true }).addTo(map);
 """
 
 ZONE_JS = """
     function zoneColor(imaginary) {
-        if (imaginary === 3) return 'rgba(230,126,34,0.7)';
+        if (imaginary === 3) return 'rgba(0,100,255,0.75)';
         if (imaginary === 5) return 'rgba(142,68,173,0.7)';
         return 'rgba(39,174,96,0.55)';
     }
@@ -1388,7 +1956,7 @@ ZONE_JS = """
         if (z.total_revenue > 0) {
             profitHtml = '<div class="popup-section">' +
                 '<div class="popup-section-title">실적 <span style="font-weight:400;font-size:10px;color:#8890a4;margin-left:4px;">최근 4주</span></div>' +
-                '<div class="popup-row"><span class="popup-label">총 매출</span><b>' + fmtNum(z.total_revenue) + '원</b></div>' +
+                '<div class="popup-row"><span class="popup-label">존 매출(4주)</span><b>' + fmtNum(z.total_revenue) + '원</b></div>' +
                 '<div class="popup-row"><span class="popup-label">대당 매출</span><b>' + fmtNum(z.revenue_per_car_28d) + '원</b></div>' +
                 '<div class="popup-row"><span class="popup-label">대당 GP</span><b>' + fmtNum(z.gp_per_car_28d) + '원</b></div>' +
                 '<div class="popup-row"><span class="popup-label">가동률</span><b>' + (z.utilization_rate || 0).toFixed(1) + '%</b></div>' +
@@ -1402,7 +1970,8 @@ ZONE_JS = """
             '<div class="popup-row"><span class="popup-label">유형</span><span class="popup-badge" style="background:' + zoneColor(z.imaginary) + '">' + zoneLabel(z.imaginary) + '</span></div>' +
             '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + d2dColor + ';font-weight:600">' + d2d + '</span></div>' +
             contractHtml +
-            profitHtml;
+            profitHtml +
+            '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
     }
 """
 
@@ -1419,8 +1988,11 @@ def _read_ngrok_url():
         return ''
 
 
-def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, parking_contract=None, timeline_data=None):
+def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, parking_contract=None, timeline_data=None, closed_data=None, team_id='gyeonggi'):
     """잠재 수요 지도 HTML 생성"""
+    team_name = TEAM_CONFIG[team_id]['name']
+    team_center = TEAM_CONFIG[team_id]['center']
+    team_zoom = TEAM_CONFIG[team_id]['zoom']
     if analysis is None:
         analysis = {}
     # analysis가 dict(growth/decline)이면 분리, 아니면 하위호환
@@ -1440,11 +2012,31 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         socar_supply = {}
     if parking_contract is None:
         parking_contract = {}
+    if parking_contract:
+        parking_contract = {int(k): v for k, v in parking_contract.items()}
     if timeline_data is None:
         timeline_data = {}
+    if closed_data is None:
+        closed_data = []
+    # '구'로 끝나는 region2에 상위 시/도 prefix 추가 (영도구→부산 영도구)
+    # '시' 하위 '구'는 이미 "창원시 성산구" 형태이므로 제외
+    def _prefix_region2(r1, r2):
+        r2 = r2.replace('\u3000', ' ')
+        if r2.endswith('구') and ' ' not in r2:
+            r1_short = r1.replace('특별시','').replace('광역시','').replace('특별자치도','').replace('특별자치시','').replace('도','')
+            return f'{r1_short} {r2}'
+        return r2
+
     # profit + 주차 계약 데이터를 zones_data에 병합
     for z in zones_data:
         zid = int(z.get('zone_id', 0))
+        z['zone_id'] = zid
+        z['imaginary'] = int(z.get('imaginary', 0) or 0)
+        z['car_count'] = int(z.get('car_count', 0) or 0)
+        z['lat'] = float(z.get('lat', 0))
+        z['lng'] = float(z.get('lng', 0))
+        # region2에 상위 시/도 prefix 추가
+        z['region2'] = _prefix_region2(z.get('region1', ''), z.get('region2', ''))
         p = profit_data.get(zid, {})
         z['total_revenue'] = p.get('total_revenue', 0)
         z['revenue_per_car_28d'] = p.get('revenue_per_car_28d', 0)
@@ -1463,30 +2055,67 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
     # gcar 데이터 변환
     gcar_zones = []
     for g in gcar_data:
+        sig = g.get('sig_name', '')
+        r1_from_sig = sig.split()[0] if sig else ''
+        r2 = _prefix_region2(r1_from_sig, g.get('region2', ''))
         gcar_zones.append({
             'zone_id': int(g.get('zone_id', 0)),
             'zone_name': g.get('zone_name', ''),
-            'region2': g.get('region2', '').replace('\u3000', ' '),
+            'region2': r2,
             'lat': float(g.get('lat', 0)),
             'lng': float(g.get('lng', 0)),
             'total_cars': int(g.get('total_cars', 0)),
             'sig_name': g.get('sig_name', ''),
         })
 
-    # Market share 분석: region2별 쏘카(profit_car_daily 기준) vs 그린카 차량수 비교
+    # 폐쇄 존 데이터 변환 + parking_contract 병합
+    closed_zones = []
+    for cz in closed_data:
+        zid = int(cz.get('zone_id', 0))
+        pc = parking_contract.get(zid, {})
+        closed_zones.append({
+            'zone_id': zid,
+            'zone_name': cz.get('zone_name', ''),
+            'parking_name': cz.get('parking_name', ''),
+            'lat': float(cz.get('lat', 0)),
+            'lng': float(cz.get('lng', 0)),
+            'region2': cz.get('region2', ''),
+            'address': cz.get('address', ''),
+            'state': int(cz.get('state', 0)),
+            'first_date': str(cz.get('first_date', '')),
+            'last_date': str(cz.get('last_date', '')),
+            'operation_days': int(cz.get('operation_days', 0)),
+            'revenue_per_car_28d': int(float(cz.get('revenue_per_car_28d', 0) or 0)),
+            'gp_per_car_28d': int(float(cz.get('gp_per_car_28d', 0) or 0)),
+            'utilization_rate': float(cz.get('utilization_rate', 0) or 0),
+            'hist_car_count': float(cz.get('hist_car_count', 0) or 0),
+            'provider_name': pc.get('provider_name', ''),
+            'settlement_type': pc.get('settlement_type', ''),
+            'price_per_car': pc.get('price_per_car', 0),
+        })
+
+    # Market share 분석: region2별 쏘카(zones_data 현재 기준) vs 그린카 차량수 비교
+    socar_by_region = {}
+    for z in zones_data:
+        r2 = z.get('region2', '')
+        if not r2:
+            continue
+        socar_by_region.setdefault(r2, {'cars': 0, 'zones': 0})
+        socar_by_region[r2]['cars'] += z.get('car_count', 0)
+        socar_by_region[r2]['zones'] += 1
     gcar_by_region = {}
     for g in gcar_zones:
-        r2 = g['region2'].replace(' ', '\u3000')
+        r2 = g['region2'].replace('\u3000', ' ')
         gcar_by_region.setdefault(r2, {'cars': 0, 'zones': 0})
         gcar_by_region[r2]['cars'] += g['total_cars']
         gcar_by_region[r2]['zones'] += 1
-    all_regions_ms = sorted(set(list(socar_supply.keys()) + list(gcar_by_region.keys())))
+    all_regions_ms = sorted(set(list(socar_by_region.keys()) + list(gcar_by_region.keys())))
     market_share = []
     for r2 in all_regions_ms:
-        s = socar_supply.get(r2, {'socar_cars': 0, 'socar_zones': 0})
+        s = socar_by_region.get(r2, {'cars': 0, 'zones': 0})
         g = gcar_by_region.get(r2, {'cars': 0, 'zones': 0})
-        sc = s.get('socar_cars', 0)
-        sz = s.get('socar_zones', 0)
+        sc = s.get('cars', 0)
+        sz = s.get('zones', 0)
         gc = g['cars']
         gz = g['zones']
         total = sc + gc
@@ -1501,7 +2130,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
             'total_cars': total,
             'socar_share': round(sc / total * 100, 1) if total > 0 else 0,
         })
-    market_share.sort(key=lambda x: x['socar_share'])
+    market_share.sort(key=lambda x: x['region2'])
 
     total_a = round(sum(int(r['access_count']) for r in access_data) / num_weeks)
     total_r = round(sum(int(r['reservation_count']) for r in reservation_data) / num_weeks)
@@ -1510,6 +2139,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
     total_cars = sum(int(z.get('car_count', 0)) for z in zones_data)
     total_gcar_z = len(gcar_zones)
     total_gcar_cars = sum(g['total_cars'] for g in gcar_zones)
+    total_closed_z = len(closed_zones)
 
     regions = sorted(set(z.get('region2', '') for z in zones_data if z.get('region2')))
 
@@ -1522,7 +2152,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>경기도 카셰어링 잠재 수요 지도</title>
+<title>{team_name} 수요/인프라 지도</title>
 {LEAFLET_CDN}
 <style>
 {SHARED_STYLES}
@@ -1547,99 +2177,99 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 .scale-col .scale-labels {{ display: flex; flex-direction: column; justify-content: space-between; height: 120px; font-size: 9px; color: #8890a4; }}
 .scale-row {{ display: flex; gap: 4px; align-items: stretch; }}
 .sim-ctx {{
-    position: absolute; z-index: 2000; background: #262b3e; border: 1px solid #3a3f55;
-    border-radius: 8px; padding: 4px 0; box-shadow: 0 4px 16px rgba(0,0,0,0.5); display: none;
+    position: absolute; z-index: 2000; background: #ffffff;
+    border-radius: 12px; padding: 4px 0; box-shadow: 0 4px 20px rgba(0,0,0,0.12); display: none;
 }}
 .sim-ctx-item {{
-    padding: 8px 16px; font-size: 12px; color: #c0c8e0; cursor: pointer; white-space: nowrap;
+    padding: 10px 18px; font-size: 12px; color: #5a6270; cursor: pointer; white-space: nowrap;
+    transition: all 0.15s; font-weight: 600;
 }}
-.sim-ctx-item:hover {{ background: #303760; color: #fff; }}
+.sim-ctx-item:hover {{ background: #f4f5f7; color: #1a1a1a; }}
 .sim-panel {{
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 2000;
-    background: #1e2233; border: 1px solid #3a3f55; border-radius: 12px;
-    padding: 24px 28px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); width: 800px; max-height: 90vh; overflow-y: auto;
-    display: none; color: #e0e0e0; font-size: 12px;
+    background: #ffffff; border: none; border-radius: 20px;
+    padding: 28px 32px; box-shadow: 0 16px 48px rgba(0,0,0,0.15); width: 1100px; max-width: 95vw; max-height: 90vh; overflow-y: auto;
+    display: none; color: #1a1a1a; font-size: 12px;
 }}
 .sim-body {{ display: flex; gap: 24px; }}
 .sim-left {{ flex: 1; min-width: 0; }}
 .sim-right {{
-    width: 320px; flex-shrink: 0; background: #323850; border: 1px solid #3a3f55;
-    border-radius: 8px; padding: 18px 20px;
-    font-size: 13px; color: #c0c8e0; line-height: 1.75;
+    width: 320px; flex-shrink: 0; background: #f7f8fa;
+    border-radius: 12px; padding: 18px 20px;
+    font-size: 13px; color: #5a6270; line-height: 1.75;
 }}
-.sim-right h4 {{ font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #4a5070; }}
+.sim-right h4 {{ font-size: 14px; font-weight: 800; color: #1a1a1a; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #f0f1f3; }}
 .sim-right .cr-section {{ margin-bottom: 14px; }}
-.sim-right .cr-title {{ font-size: 13px; font-weight: 700; color: #42a5f5; margin-bottom: 5px; }}
-.sim-right code {{ background: #1e2233; padding: 2px 6px; border-radius: 3px; font-size: 12px; color: #ffb74d; }}
-.sim-panel h3 {{ font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #3a3f55; }}
+.sim-right .cr-title {{ font-size: 13px; font-weight: 700; color: #0064FF; margin-bottom: 5px; }}
+.sim-right code {{ background: #f0f4ff; padding: 2px 7px; border-radius: 4px; font-size: 12px; color: #0064FF; }}
+.sim-panel h3 {{ font-size: 16px; font-weight: 800; color: #1a1a1a; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #f0f1f3; }}
 .sim-row {{ display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }}
-.sim-row .sim-label {{ color: #8890a4; font-size: 11px; }}
-.sim-row .sim-value {{ font-weight: 700; color: #fff; font-size: 13px; }}
-.sim-section {{ border-top: 1px solid #3a3f55; margin-top: 10px; padding-top: 10px; }}
-.sim-section-title {{ font-size: 10px; font-weight: 700; color: #6b7394; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }}
+.sim-row .sim-label {{ color: #8b95a5; font-size: 11px; font-weight: 600; }}
+.sim-row .sim-value {{ font-weight: 800; color: #1a1a1a; font-size: 13px; }}
+.sim-section {{ border-top: 1px solid #f0f1f3; margin-top: 10px; padding-top: 10px; }}
+.sim-section-title {{ font-size: 10px; font-weight: 700; color: #8b95a5; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }}
 .sim-result {{
-    margin-top: 14px; padding: 12px 16px; border-radius: 8px; text-align: center;
-    font-size: 14px; font-weight: 700;
+    margin-top: 14px; padding: 14px 18px; border-radius: 12px; text-align: center;
+    font-size: 14px; font-weight: 800;
 }}
-.sim-result.recommend {{ background: rgba(39,174,96,0.15); border: 1px solid #27ae60; color: #27ae60; }}
-.sim-result.not-recommend {{ background: rgba(231,76,60,0.15); border: 1px solid #e74c3c; color: #e74c3c; }}
+.sim-result.recommend {{ background: #edfcf2; border: none; color: #18a34a; }}
+.sim-result.not-recommend {{ background: #fef2f2; border: none; color: #e74c3c; }}
 .sim-close {{
-    position: absolute; top: 12px; right: 14px; background: none; border: none;
-    color: #8890a4; font-size: 18px; cursor: pointer; line-height: 1;
+    position: absolute; top: 14px; right: 16px; background: #f4f5f7; border: none;
+    color: #8b95a5; font-size: 16px; cursor: pointer; line-height: 1; transition: all 0.2s;
+    width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
 }}
-.sim-close:hover {{ color: #fff; }}
+.sim-close:hover {{ background: #e8eaed; color: #1a1a1a; }}
 .sim-overlay {{
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4);
-    z-index: 1999; display: none;
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.3);
+    z-index: 1999; display: none; backdrop-filter: blur(4px);
 }}
 .sim-marker-pin {{
-    width: 32px; height: 32px; border-radius: 50%; background: rgba(231,76,60,0.8);
+    width: 32px; height: 32px; border-radius: 50%; background: #0064FF;
     border: 2px dashed #fff; display: flex; align-items: center; justify-content: center;
     color: #fff; font-size: 14px; font-weight: 700; animation: sim-pulse 1.5s infinite;
+    box-shadow: 0 2px 8px rgba(0,100,255,0.3);
 }}
-@keyframes sim-pulse {{ 0%,100% {{ box-shadow: 0 0 0 0 rgba(231,76,60,0.5); }} 50% {{ box-shadow: 0 0 0 12px rgba(231,76,60,0); }} }}
+@keyframes sim-pulse {{ 0%,100% {{ box-shadow: 0 0 0 0 rgba(0,100,255,0.4); }} 50% {{ box-shadow: 0 0 0 12px rgba(0,100,255,0); }} }}
 </style>
 </head>
 <body>
 
 <div class="sidebar">
     <div class="sidebar-header">
-        <h1>경기도 카셰어링 잠재 수요 지도</h1>
+        <h1><img class="socar-logo" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAIAAACR5s1WAAABY2lDQ1BrQ0dDb2xvclNwYWNlRGlzcGxheVAzAAAokX2QsUvDUBDGv1aloHUQHRwcMolDlJIKuji0FURxCFXB6pS+pqmQxkeSIgU3/4GC/4EKzm4Whzo6OAiik+jm5KTgouV5L4mkInqP435877vjOCA5bnBu9wOoO75bXMorm6UtJfWMBL0gDObxnK6vSv6uP+P9PvTeTstZv///jcGK6TGqn5QZxl0fSKjE+p7PJe8Tj7m0FHFLshXyieRyyOeBZ71YIL4mVljNqBC/EKvlHt3q4brdYNEOcvu06WysyTmUE1jEDjxw2DDQhAId2T/8s4G/gF1yN+FSn4UafOrJkSInmMTLcMAwA5VYQ4ZSk3eO7ncX3U+NtYMnYKEjhLiItZUOcDZHJ2vH2tQ8MDIEXLW54RqB1EeZrFaB11NguASM3lDPtlfNauH26Tww8CjE2ySQOgS6LSE+joToHlPzA3DpfAEDp2ITpJYOWwAAAARjSUNQDA0AAW4D4+8AAAA4ZVhJZk1NACoAAAAIAAGHaQAEAAAAAQAAABoAAAAAAAKgAgAEAAAAAQAAACygAwAEAAAAAQAAACwAAAAA36bFmQAAAZ1pVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDYuMC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6ZXhpZj0iaHR0cDovL25zLmFkb2JlLmNvbS9leGlmLzEuMC8iPgogICAgICAgICA8ZXhpZjpQaXhlbFhEaW1lbnNpb24+NjAwPC9leGlmOlBpeGVsWERpbWVuc2lvbj4KICAgICAgICAgPGV4aWY6UGl4ZWxZRGltZW5zaW9uPjM3NDwvZXhpZjpQaXhlbFlEaW1lbnNpb24+CiAgICAgIDwvcmRmOkRlc2NyaXB0aW9uPgogICA8L3JkZjpSREY+CjwveDp4bXBtZXRhPgpUzMdaAAAC+ElEQVRYCe2XTWsTQRjH55ndnd1N0qTG2iqhYhGkvqAURS8KFS+CiAfvPYoXP4PgVxDvFQS/gAcVPHhpRaVIoaUKfSGIpW/20LRJdmfm8dkkKzkIzUzRetg5ZJckM/Ob////zOwCIrLDbvywAZL5M4jUhUyJTIlUgfSaZeK/UsJNaYyv1TX1airiHBhLNn6l4dZld/SkzYA2fdq8rz/GTyYxDBmdPgBQb6LS8l9DbOxgvsQC0T7/EASWip6xnq0O9kpU1zHwQaTzIuBQ2Y6BWUJs19QSQQTAWzVOahQ8NjxgWfCWEDOLamuPiYCWTgCgEAeLODxIIbVplhBvZpTjcdfrzKpidmGEF0PHBoFZ2TFbjT8tqzxNCa1UIgMH7l5N02EOYqyE1Pj8vdTcFUnXxAsGIKJo+nNj7qvQwLXCWOLNMXHxdK9YxhBvZ+MvVczloOVE6wNxZWH32RwXeUcpJhXfrePqz/hvQWzsqJcfZBBwp1MHQEZsVmuyofuPhsxxpWSoIZfjt68Z5MNACXosfzEdbe5BukGRDyzak5vf62ExdH1Ha8KARhPvX2fjl0Tv2TCAWFyP380rh7sUi/YErsNWl2qe5/l9AriDCkmg4SH96F5Su703A4icz0dPgJJUDAkEd2B5pbGzLfsH+zzBFVUa5xHDh3fc42UDL2goMHr5IQl+/19pnHi8NrfmlQZCygiZFUk2NsKePvC9NDI9imGgRLJ6qoZ2WTA2v9RYWIXSMd/zk5QShACcGPdMCaivGUT3yqYWYhb4Qd4F0h4hVmy0wq6cMTOiPaA9xLcfunBEuKIjjUS8cY4LQyMOBBFJvdWAQpEL0Tk+uMvGTrVlaG2j3aLtd2+pxG6TNZgnfHBa82rEco5VyhQOYwIitISoR9hE0FRcip7tUGoIAywESW73W/YffreEyPlwtsJqTZ0UBiCl8nwFPJtQJkxm+0T3KsiCdOekr9HhVLs2MhwIohvogPeJnIfeMojUgkyJTIlUgfSaZSJV4heBdAXfF6Z6qQAAAABJRU5ErkJggg==" alt="SOCAR">{team_name} 수요/인프라 지도</h1>
         <div class="date">{THREE_MONTHS_AGO} ~ {TODAY}</div>
         <div class="date">업데이트: {TODAY}</div>
     </div>
-    <div class="stat-row">
-        <div class="stat-card"><span class="label">접속/주</span><span class="value">{total_a:,}</span></div>
-        <div class="stat-card"><span class="label">예약/주</span><span class="value">{total_r:,}</span></div>
-        <div class="stat-card"><span class="label">부름/주</span><span class="value">{total_d:,}</span></div>
-    </div>
-    <div class="stat-row">
-        <div class="stat-card socar"><span class="label">쏘카 존</span><span class="value">{total_z:,}</span></div>
-        <div class="stat-card socar"><span class="label">쏘카 차량</span><span class="value">{total_cars:,}</span></div>
-    </div>
-    <div class="stat-row">
-        <div class="stat-card gcar"><span class="label">그린카 존</span><span class="value">{total_gcar_z:,}</span></div>
-        <div class="stat-card gcar"><span class="label">그린카 차량</span><span class="value">{total_gcar_cars:,}</span></div>
-    </div>
     <div class="sidebar-section">
-        <div class="sidebar-section-title">지역 검색</div>
+        <div class="sidebar-section-title">검색</div>
+        <div style="display:flex;gap:0;margin-bottom:8px;background:#f4f5f7;border-radius:10px;padding:3px;">
+            <button class="search-tab active" id="searchModeAddr" style="flex:1;padding:6px 0;font-size:11px;text-align:center;border:none;border-radius:8px;cursor:pointer;font-weight:600;transition:all 0.2s;">주소 검색</button>
+            <button class="search-tab" id="searchModeZone" style="flex:1;padding:6px 0;font-size:11px;text-align:center;border:none;border-radius:8px;cursor:pointer;font-weight:600;transition:all 0.2s;">존 검색</button>
+        </div>
         <div style="position:relative;">
-            <input type="text" id="regionSearch" placeholder="지역명 또는 존 이름 검색" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid #3a3f55;background:#262b3e;color:#c0c8e0;font-size:11px;box-sizing:border-box;">
-            <div id="searchResults" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:200px;overflow-y:auto;background:#262b3e;border:1px solid #3a3f55;border-top:none;border-radius:0 0 6px 6px;z-index:9999;"></div>
+            <input type="text" id="regionSearch" placeholder="주소, 장소명 검색" style="width:100%;padding:9px 12px;border-radius:10px;border:1px solid #e8eaed;background:#f7f8fa;color:#1a1a1a;font-size:12px;box-sizing:border-box;transition:all 0.2s;font-weight:500;" onfocus="this.style.borderColor='#0064FF';this.style.boxShadow='0 0 0 3px rgba(0,100,255,0.1)'" onblur="this.style.borderColor='#e8eaed';this.style.boxShadow='none'">
+            <div id="searchResults" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:200px;overflow-y:auto;background:#ffffff;border:1px solid #e8eaed;border-top:none;border-radius:0 0 10px 10px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.08);"></div>
         </div>
     </div>
     <div class="sidebar-section">
         <div class="sidebar-section-title">데이터 레이어</div>
         <button class="sidebar-btn" id="toggleAccess"><span class="dot" style="background:#fb8c00"></span>앱 접속</button>
-        <button class="sidebar-btn" id="toggleRes"><span class="dot" style="background:#1e88e5"></span>예약 생성</button>
+        <button class="sidebar-btn" id="toggleRes"><span class="dot" style="background:#7e57c2"></span>예약 생성</button>
         <button class="sidebar-btn" id="toggleDtod"><span class="dot" style="background:#00bcd4"></span>부름 호출</button>
         <button class="sidebar-btn" id="toggleZones"><span class="dot" style="background:#27ae60"></span>운영 존</button>
-        <button class="sidebar-btn" id="toggleGcar"><span class="dot" style="background:#ff6f00"></span>그린카 존</button>
+        <div id="zoneTypeFilter" style="display:block;padding:4px 10px 8px 28px;">
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6270;cursor:pointer;padding:6px 0;"><input type="checkbox" class="zone-type-chk" value="0" checked style="accent-color:#27ae60;width:16px;height:16px;"> 일반</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6270;cursor:pointer;padding:6px 0;"><input type="checkbox" class="zone-type-chk" value="5" checked style="accent-color:#8e44ad;width:16px;height:16px;"> 부름우선</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6270;cursor:pointer;padding:6px 0;"><input type="checkbox" class="zone-type-chk" value="3" checked style="accent-color:#0064FF;width:16px;height:16px;"> 부름스테이션</label>
+        </div>
+        <button class="sidebar-btn" id="toggleGcar"><span class="dot" style="background:#ef5350"></span>그린카 존</button>
+        <button class="sidebar-btn" id="toggleClosed"><span class="dot" style="background:#616161"></span>폐쇄 존</button>
     </div>
     <div class="sidebar-section">
         <div class="sidebar-section-title">분석</div>
         <button class="sidebar-btn" id="toggleGap"><span class="dot" style="background:#8e44ad"></span>미진출 지역 분석</button>
-        <button class="sidebar-btn" id="toggleAnalysis"><span class="dot" style="background:#ef5350"></span>공급 분석</button>
+        <button class="sidebar-btn" id="toggleAnalysis"><span class="dot" style="background:#ef5350"></span>수요/공급 비교 분석</button>
         <button class="sidebar-btn" id="toggleMarketShare"><span class="dot" style="background:#ff7043"></span>Market Share</button>
     </div>
     <div class="sidebar-section">
@@ -1651,9 +2281,10 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
     </div>
     <div class="legend-row">
         <div class="legend-item"><span class="legend-dot" style="background:#27ae60"></span>일반</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#e67e22"></span>스테이션</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#0064FF"></span>스테이션</div>
         <div class="legend-item"><span class="legend-dot" style="background:#8e44ad"></span>부름우선</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#ff6f00"></span>그린카</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#ef5350"></span>그린카</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#616161"></span>폐쇄</div>
     </div>
 </div>
 
@@ -1667,78 +2298,84 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 
 <div class="gap-panel" id="gapPanel">
     <h3>미진출 지역 분석</h3>
-    <div style="font-size:11px;color:#6b7394;margin-bottom:8px;">앱 접속 월평균 30건 이상, 반경 800m 내 운영 존 없음 (서울/인천 제외)</div>
+    <div style="font-size:11px;color:#8b95a5;margin-bottom:8px;font-weight:500;">앱 접속 월평균 30건 이상, 반경 {'300m' if team_id == 'seoul' else '500m' if team_id == 'gyeonggi' else '800m'} 내 운영 존 없음</div>
+    <div id="gapRegionFilter" style="margin-bottom:10px;display:flex;align-items:center;gap:6px;{'display:none;' if len(TEAM_CONFIG[team_id]['regions']) <= 1 else ''}">
+        <span style="font-size:11px;color:#8b95a5;font-weight:600;">지역</span>
+        <select id="gapRegionSelect" style="padding:6px 12px;border-radius:8px;border:1px solid #e8eaed;background:#fff;color:#1a1a1a;font-size:12px;font-weight:600;">
+            <option value="">전체 지역</option>
+            {''.join(f'<option value="{r}">{r}</option>' for r in TEAM_CONFIG[team_id]['regions'])}
+        </select>
+    </div>
     <div id="gapList"></div>
 </div>
 
 <div class="gap-panel" id="analysisPanel" style="width:820px;">
-    <h3>공급 분석</h3>
-    <div style="display:flex;gap:4px;margin-bottom:10px;">
+    <h3>수요/공급 비교 분석</h3>
+    <div style="display:flex;gap:4px;margin-bottom:10px;align-items:center;">
         <button id="tabGrowth" class="analysis-tab active" onclick="switchAnalysisTab('growth')">수요 성장</button>
         <button id="tabDecline" class="analysis-tab" onclick="switchAnalysisTab('decline')">수요 감소</button>
+        {'<div style="margin-left:auto;display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:#8b95a5;font-weight:600;">지역</span><select id="analysisRegionFilter" style="padding:6px 12px;border-radius:8px;border:1px solid #e8eaed;background:#fff;color:#1a1a1a;font-size:12px;font-weight:600;" onchange="renderAnalysis()"><option value="">전체 지역</option>' + ''.join(f'<option value="{r}">{r}</option>' for r in TEAM_CONFIG[team_id]['regions']) + '</select></div>' if len(TEAM_CONFIG[team_id]['regions']) > 1 else ''}
     </div>
-    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;" id="analysisDesc">예약 점유율 상승 추세 지역 | 증감·그래프 = 경기도 대비 점유율 변화 (경기도 전체 행은 절대값)</div>
+    <div style="font-size:11px;color:#8b95a5;margin-bottom:10px;font-weight:500;" id="analysisDesc">예약 점유율 상승 추세 지역 | 증감·그래프 = {team_name} 전체 대비 점유율 변화 ({team_name} 전체 행은 절대값)</div>
     <table style="width:100%;border-collapse:collapse;font-size:11px;">
         <thead><tr>
-            <th data-col="region2" style="text-align:left;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">지역</th>
-            <th data-col="access_weekly" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">접속/주</th>
-            <th style="padding:4px 6px;border-bottom:2px solid #3a3f55;color:#8890a4;">추이</th>
-            <th data-col="access_growth" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">증감</th>
-            <th data-col="res_weekly" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">예약/주</th>
-            <th style="padding:4px 6px;border-bottom:2px solid #3a3f55;color:#8890a4;">추이</th>
-            <th data-col="res_growth" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">증감</th>
-            <th data-col="cars" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">차량</th>
-            <th style="padding:4px 6px;border-bottom:2px solid #3a3f55;color:#8890a4;">추이</th>
-            <th data-col="car_growth" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">증감</th>
-            <th data-col="status" style="text-align:center;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">판정</th>
+            <th data-col="region2" style="text-align:left;padding:6px 6px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#8b95a5;font-weight:600;">지역</th>
+            <th data-col="access_weekly" style="text-align:right;padding:6px 6px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#8b95a5;font-weight:600;">접속/주</th>
+            <th style="padding:6px 6px;border-bottom:2px solid #e0e2e6;color:#8b95a5;font-weight:600;">추이</th>
+            <th data-col="access_growth" style="text-align:right;padding:6px 6px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#8b95a5;font-weight:600;">증감</th>
+            <th data-col="res_weekly" style="text-align:right;padding:6px 6px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#8b95a5;font-weight:600;">예약/주</th>
+            <th style="padding:6px 6px;border-bottom:2px solid #e0e2e6;color:#8b95a5;font-weight:600;">추이</th>
+            <th data-col="res_growth" style="text-align:right;padding:6px 6px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#8b95a5;font-weight:600;">증감</th>
+            <th data-col="cars" style="text-align:right;padding:6px 6px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#8b95a5;font-weight:600;">차량</th>
+            <th style="padding:6px 6px;border-bottom:2px solid #e0e2e6;color:#8b95a5;font-weight:600;">추이</th>
+            <th data-col="car_growth" style="text-align:right;padding:6px 6px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#8b95a5;font-weight:600;">증감</th>
+            <th data-col="status" style="text-align:center;padding:6px 6px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#8b95a5;font-weight:600;">판정</th>
         </tr></thead>
         <tbody id="analysisBody"></tbody>
     </table>
 </div>
 
-<div class="gap-panel" id="marketSharePanel" style="width:580px;">
-    <h3>Market Share 분석 — 쏘카 vs 그린카</h3>
-    <div style="font-size:11px;color:#6b7394;margin-bottom:10px;">지역별 차량수 기준 점유율 비교 | 쏘카 점유율 낮은 순 정렬</div>
-    <table style="width:100%;border-collapse:collapse;font-size:11px;">
-        <thead><tr>
-            <th data-ms="region2" style="text-align:left;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">지역</th>
-            <th data-ms="socar_cars" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">쏘카 차량</th>
-            <th data-ms="socar_zones" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">쏘카 존</th>
-            <th data-ms="gcar_cars" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">그린카 차량</th>
-            <th data-ms="gcar_zones" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">그린카 존</th>
-            <th data-ms="socar_share" style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;cursor:pointer;color:#8890a4;">쏘카 점유율</th>
+<div class="gap-panel" id="marketSharePanel" style="width:680px;">
+    <div style="margin-bottom:16px;">
+        <h3 style="margin:0 0 6px 0;font-size:16px;">Market Share</h3>
+        <div style="font-size:11px;color:#8b95a5;font-weight:500;">지역별 차량수 기준 · 쏘카 vs 그린카 점유율 비교</div>
+    </div>
+    <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;">
+        <thead><tr style="background:#f7f8fa;">
+            <th data-ms="region2" style="text-align:left;padding:10px 12px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#5a6270;font-weight:700;border-radius:8px 0 0 0;">지역</th>
+            <th data-ms="socar_cars" style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#0064FF;font-weight:700;">쏘카 차량</th>
+            <th data-ms="socar_zones" style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#0064FF;font-weight:700;">쏘카 존</th>
+            <th data-ms="gcar_cars" style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#ef5350;font-weight:700;">그린카 차량</th>
+            <th data-ms="gcar_zones" style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#ef5350;font-weight:700;">그린카 존</th>
+            <th data-ms="socar_share" style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;cursor:pointer;color:#5a6270;font-weight:700;border-radius:0 8px 0 0;">점유율</th>
         </tr></thead>
         <tbody id="marketShareBody"></tbody>
     </table>
 </div>
 
-<div class="heatmap-scale" id="heatmapScale">
-    <div class="scale-col">
-        <span class="scale-title" style="color:#e65100">접속/주</span>
-        <div class="scale-row">
-            <div class="scale-bar" style="background:linear-gradient(to bottom, #e65100, #ef6c00, #fb8c00, #ffa726, #ffcc80, #ffe0b2, #fff3e0)"></div>
-            <div class="scale-labels" id="accessScaleLabels"><span>-</span><span>-</span><span>-</span></div>
-        </div>
-    </div>
-    <div class="scale-col">
-        <span class="scale-title" style="color:#0d47a1">예약/주</span>
-        <div class="scale-row">
-            <div class="scale-bar" style="background:linear-gradient(to bottom, #0d47a1, #1565c0, #1e88e5, #42a5f5, #90caf9, #bbdefb, #e3f2fd)"></div>
-            <div class="scale-labels" id="resScaleLabels"><span>-</span><span>-</span><span>-</span></div>
-        </div>
-    </div>
-</div>
 
 <div class="gap-panel" id="timelinePanel" style="width:720px;max-width:90vw;">
     <div style="display:flex;justify-content:space-between;align-items:center;">
         <h3 id="timelineTitle">예약 현황</h3>
-        <span style="cursor:pointer;font-size:18px;color:#888;" onclick="document.getElementById('timelinePanel').style.display='none'">&times;</span>
+        <span id="timelineClose" style="cursor:pointer;font-size:16px;color:#8b95a5;background:#f4f5f7;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.2s;">&times;</span>
     </div>
-    <div style="font-size:11px;color:#6b7394;margin-bottom:8px;">차량별 예약 타임라인 (전후 1주)</div>
+    <div style="font-size:11px;color:#8b95a5;margin-bottom:10px;font-weight:500;">차량별 예약 타임라인 (전후 1주)</div>
     <div id="timelineContent" style="overflow-x:auto;"></div>
 </div>
 
 <div id="map"></div>
+<div style="position:fixed;top:12px;left:272px;z-index:800;background:#fff;padding:7px 14px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.08);font-size:11px;color:#5a6270;font-weight:500;display:flex;align-items:center;gap:6px;pointer-events:none;">
+    <span style="font-size:14px;">🖱️</span> 우클릭 시 해당 좌표에서 존 개설 시뮬레이션 가능
+</div>
+<div id="toolPanel" style="position:fixed;top:12px;right:12px;z-index:800;display:flex;gap:6px;">
+    <button id="toolDistance" style="padding:7px 14px;border:none;border-radius:10px;background:#fff;color:#5a6270;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .15s;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <span style="font-size:14px;">📏</span> 거리 재기
+    </button>
+    <button id="toolRadius" style="padding:7px 14px;border:none;border-radius:10px;background:#fff;color:#5a6270;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .15s;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <span style="font-size:14px;">⭕</span> 반경 측정
+    </button>
+</div>
+<div id="measureGuide" style="display:none;position:fixed;top:50px;right:12px;z-index:1000;background:#fff;border-radius:10px;padding:10px 14px;font-size:10px;color:#5a6270;max-width:180px;box-shadow:0 4px 16px rgba(0,0,0,0.1);font-weight:500;"></div>
 
 <script>
 var accessData = {jd(access_heat)};
@@ -1749,7 +2386,9 @@ var gapsData = {jd(gaps)};
 var analysisGrowth = {jd(analysis_growth)};
 var analysisDecline = {jd(analysis_decline)};
 var gcarData = {jd(gcar_zones)};
+var closedData = {jd(closed_zones)};
 var marketShareData = {jd(market_share)};
+var teamTotalLabel = {jd(team_name + ' 전체')};
 var timelineData = {jd(timeline_data)};
 var regions = {jd(regions)};
 var lastUpdateDemand = '{LAST_UPDATE_DEMAND}';
@@ -1769,21 +2408,42 @@ var searchInput = document.getElementById('regionSearch');
 var searchResults = document.getElementById('searchResults');
 var searchItemStyle = 'padding:6px 10px;cursor:pointer;font-size:11px;color:#c0c8e0;border-bottom:1px solid #2a2f45;';
 
-function doSearch(query) {{
+var searchMode = 'addr';
+var modeZoneBtn = document.getElementById('searchModeZone');
+var modeAddrBtn = document.getElementById('searchModeAddr');
+modeZoneBtn.addEventListener('click', function() {{
+    searchMode = 'zone';
+    styleBtn(modeZoneBtn, true); styleBtn(modeAddrBtn, false);
+    searchInput.placeholder = '존 이름, 지역명 검색';
+    searchInput.value = ''; searchResults.style.display = 'none';
+    searchInput.focus();
+}});
+modeAddrBtn.addEventListener('click', function() {{
+    searchMode = 'addr';
+    styleBtn(modeAddrBtn, true); styleBtn(modeZoneBtn, false);
+    searchInput.placeholder = '주소, 장소명 검색 (카카오맵)';
+    searchInput.value = ''; searchResults.style.display = 'none';
+    searchInput.focus();
+}});
+
+function doZoneSearch(query) {{
     searchResults.innerHTML = '';
     if (!query || query.length < 1) {{ searchResults.style.display = 'none'; return; }}
     var q = query.toLowerCase();
     var matches = [];
-    // 지역(region2) 매칭
     regions.forEach(function(r) {{
         if (r.replace(/\\u3000/g, ' ').toLowerCase().indexOf(q) >= 0) {{
             matches.push({{ type: 'region', label: r.replace(/\\u3000/g, ' '), value: r }});
         }}
     }});
-    // 존 이름 매칭
     zonesData.forEach(function(z) {{
-        if (z.zone_name.toLowerCase().indexOf(q) >= 0 || z.parking_name.toLowerCase().indexOf(q) >= 0) {{
+        if (z.zone_name.toLowerCase().indexOf(q) >= 0 || z.parking_name.toLowerCase().indexOf(q) >= 0 || (z.address && z.address.toLowerCase().indexOf(q) >= 0) || String(z.zone_id) === q) {{
             matches.push({{ type: 'zone', label: z.zone_name + ' (' + z.region2.replace(/\\u3000/g, ' ') + ')', value: z }});
+        }}
+    }});
+    closedData.forEach(function(cz) {{
+        if (cz.zone_name.toLowerCase().indexOf(q) >= 0 || cz.parking_name.toLowerCase().indexOf(q) >= 0 || (cz.address && cz.address.toLowerCase().indexOf(q) >= 0) || String(cz.zone_id) === q) {{
+            matches.push({{ type: 'closed', label: cz.zone_name + ' (' + cz.region2.replace(/\\u3000/g, ' ') + ')', value: cz }});
         }}
     }});
     if (matches.length === 0) {{
@@ -1794,7 +2454,8 @@ function doSearch(query) {{
     matches.slice(0, 20).forEach(function(m) {{
         var div = document.createElement('div');
         div.style.cssText = searchItemStyle;
-        div.textContent = (m.type === 'region' ? '📍 ' : '🅿️ ') + m.label;
+        var icon = m.type === 'region' ? '📍 ' : m.type === 'closed' ? '⛔ ' : '🅿️ ';
+        div.textContent = icon + m.label;
         div.addEventListener('mouseenter', function() {{ this.style.background = '#3a4060'; }});
         div.addEventListener('mouseleave', function() {{ this.style.background = 'transparent'; }});
         div.addEventListener('click', function() {{
@@ -1802,6 +2463,13 @@ function doSearch(query) {{
             if (m.type === 'region') {{
                 filterByRegion(m.value);
                 searchInput.value = m.label;
+            }} else if (m.type === 'closed') {{
+                searchInput.value = m.label;
+                if (!showClosed) {{ showClosed = true; closedLayer.addTo(map); styleBtn(document.getElementById('toggleClosed'), true); }}
+                map.setView([m.value.lat, m.value.lng], 16);
+                closedLayer.eachLayer(function(lyr) {{
+                    if (lyr.getLatLng && Math.abs(lyr.getLatLng().lat - m.value.lat) < 0.0001 && Math.abs(lyr.getLatLng().lng - m.value.lng) < 0.0001) lyr.openPopup();
+                }});
             }} else {{
                 filterByRegion('');
                 searchInput.value = m.label;
@@ -1815,14 +2483,107 @@ function doSearch(query) {{
     }});
     searchResults.style.display = 'block';
 }}
-searchInput.addEventListener('input', function() {{ doSearch(this.value); }});
-searchInput.addEventListener('focus', function() {{ if (this.value) doSearch(this.value); }});
+
+var kakaoTimer = null;
+var addrPin = null;
+function placeAddrPin(lat, lng, name, addr) {{
+    if (addrPin) map.removeLayer(addrPin);
+    addrPin = L.marker([lat, lng], {{
+        icon: L.divIcon({{
+            className: 'zone-marker-wrap',
+            html: '<div style="font-size:36px;line-height:1;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));">📍</div>',
+            iconSize: [36, 36], iconAnchor: [18, 36], popupAnchor: [0, -32]
+        }})
+    }}).addTo(map).bindPopup('<b>' + name + '</b><br><span style="font-size:11px;color:#888;">' + addr + '</span>').openPopup();
+    map.setView([lat, lng], 16);
+}}
+function geocodeAndPin(query) {{
+    fetch('https://dapi.kakao.com/v2/local/search/address.json?query=' + encodeURIComponent(query) + '&size=1', {{
+        headers: {{ 'Authorization': 'KakaoAK 9a5596ace397f435fc33097cb2dc75e8' }}
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+        if (data.documents && data.documents.length > 0) {{
+            var doc = data.documents[0];
+            placeAddrPin(parseFloat(doc.y), parseFloat(doc.x), doc.address_name, doc.address ? doc.address.region_3depth_name : '');
+            searchResults.style.display = 'none';
+            return;
+        }}
+        // 주소 매칭 실패 시 키워드 검색 fallback
+        fetch('https://dapi.kakao.com/v2/local/search/keyword.json?query=' + encodeURIComponent(query) + '&size=1', {{
+            headers: {{ 'Authorization': 'KakaoAK 9a5596ace397f435fc33097cb2dc75e8' }}
+        }})
+        .then(function(r) {{ return r.json(); }})
+        .then(function(data2) {{
+            if (data2.documents && data2.documents.length > 0) {{
+                var doc = data2.documents[0];
+                placeAddrPin(parseFloat(doc.y), parseFloat(doc.x), doc.place_name, doc.address_name);
+            }} else {{
+                searchResults.innerHTML = '<div style="' + searchItemStyle + 'color:#6b7394;">주소를 찾을 수 없습니다</div>';
+                searchResults.style.display = 'block';
+            }}
+        }});
+    }})
+    .catch(function() {{}});
+}}
+function doAddrSearch(query) {{
+    clearTimeout(kakaoTimer);
+    searchResults.innerHTML = '';
+    if (!query || query.length < 2) {{ searchResults.style.display = 'none'; return; }}
+    searchResults.innerHTML = '<div style="' + searchItemStyle + 'color:#6b7394;">검색 중...</div>';
+    searchResults.style.display = 'block';
+    kakaoTimer = setTimeout(function() {{
+        fetch('https://dapi.kakao.com/v2/local/search/keyword.json?query=' + encodeURIComponent(query) + '&size=10', {{
+            headers: {{ 'Authorization': 'KakaoAK 9a5596ace397f435fc33097cb2dc75e8' }}
+        }})
+        .then(function(r) {{ return r.json(); }})
+        .then(function(data) {{
+            searchResults.innerHTML = '';
+            if (!data.documents || data.documents.length === 0) {{
+                searchResults.innerHTML = '<div style="' + searchItemStyle + 'color:#6b7394;">결과 없음</div>';
+                return;
+            }}
+            data.documents.forEach(function(doc) {{
+                var div = document.createElement('div');
+                div.style.cssText = searchItemStyle;
+                div.innerHTML = '🔍 <b>' + doc.place_name + '</b> <span style="color:#6b7394;font-size:10px;">' + doc.address_name + '</span>';
+                div.addEventListener('mouseenter', function() {{ this.style.background = '#3a4060'; }});
+                div.addEventListener('mouseleave', function() {{ this.style.background = 'transparent'; }});
+                div.addEventListener('click', function() {{
+                    searchResults.style.display = 'none';
+                    searchInput.value = doc.place_name;
+                    var lat = parseFloat(doc.y), lng = parseFloat(doc.x);
+                    placeAddrPin(lat, lng, doc.place_name, doc.address_name);
+                }});
+                searchResults.appendChild(div);
+            }});
+        }})
+        .catch(function() {{
+            searchResults.innerHTML = '<div style="' + searchItemStyle + 'color:#e74c3c;">API 오류 (서비스 활성화 확인)</div>';
+        }});
+    }}, 300);
+}}
+
+searchInput.addEventListener('input', function() {{
+    if (searchMode === 'zone') doZoneSearch(this.value);
+    else doAddrSearch(this.value);
+}});
+searchInput.addEventListener('focus', function() {{
+    if (this.value) {{
+        if (searchMode === 'zone') doZoneSearch(this.value);
+        else doAddrSearch(this.value);
+    }}
+}});
 document.addEventListener('click', function(e) {{
     if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) searchResults.style.display = 'none';
 }});
 // 전체 보기 복원: 입력 비우면 리셋
 searchInput.addEventListener('keydown', function(e) {{
     if (e.key === 'Escape') {{ this.value = ''; searchResults.style.display = 'none'; filterByRegion(''); }}
+    if (e.key === 'Enter' && searchMode === 'addr' && this.value.trim().length >= 2) {{
+        e.preventDefault();
+        geocodeAndPin(this.value.trim());
+    }}
 }});
 
 function filterByRegion(region) {{
@@ -1842,11 +2603,12 @@ function filterByRegion(region) {{
             ]);
         }}
     }} else {{
-        map.setView([37.41, 127.0], 9);
+        map.setView([{team_center[0]}, {team_center[1]}], {team_zoom});
     }}
 }}
 
-var map = L.map('map', {{ zoomControl: true }}).setView([37.41, 127.0], 9);
+var TEAM_ID = '{team_id}';
+var map = L.map('map', {{ zoomControl: false }}).setView([{team_center[0]}, {team_center[1]}], {team_zoom});
 {TILE_SETUP}
 {ZONE_JS}
 
@@ -1875,8 +2637,8 @@ function accessColor(val) {{
 function resColor(val) {{
     var ratio = Math.min(1, Math.log(val + 1) / Math.log(maxResVal + 1));
     var colors = [
-        [227,242,253], [144,202,249], [66,165,245],
-        [30,136,229], [21,101,192], [13,71,161]
+        [237,231,246], [186,164,220], [149,117,205],
+        [126,87,194], [103,58,183], [69,39,160]
     ];
     var idx = ratio * (colors.length - 1);
     var lo = Math.floor(idx), hi = Math.min(lo + 1, colors.length - 1);
@@ -1910,21 +2672,12 @@ resData.forEach(function(d) {{
     L.circleMarker([d[0], d[1]], {{
         radius: dotRadius(d[2], maxResVal),
         fillColor: resColor(d[2]),
-        color: 'rgba(13,71,161,0.7)', weight: 1.5,
+        color: 'rgba(69,39,160,0.7)', weight: 1.5,
         fillOpacity: dotOpacity(d[2], maxResVal)
     }}).bindPopup('<div style="font-weight:600">예약 생성 지점</div><div>주평균 예약: <b>' + d[2].toLocaleString() + '</b></div>').addTo(resLayer);
 }});
 resLayer.addTo(map);
 
-// 스케일 라벨 설정
-document.getElementById('accessScaleLabels').innerHTML =
-    '<span>' + formatCount(Math.round(maxAccessVal)) + '</span>' +
-    '<span>' + formatCount(Math.round(maxAccessVal * 0.5)) + '</span>' +
-    '<span>0</span>';
-document.getElementById('resScaleLabels').innerHTML =
-    '<span>' + formatCount(Math.round(maxResVal)) + '</span>' +
-    '<span>' + formatCount(Math.round(maxResVal * 0.5)) + '</span>' +
-    '<span>0</span>';
 
 var zoneLayer = L.layerGroup();
 var allZoneMarkers = [];
@@ -1935,6 +2688,16 @@ zonesData.forEach(function(z) {{
     zoneLayer.addLayer(m);
 }});
 zoneLayer.addTo(map);
+
+// 팝업 닫힐 때 타임라인도 닫기
+map.on('popupclose', function() {{
+    document.getElementById('timelinePanel').style.display = 'none';
+}});
+// 타임라인 X 클릭 시 팝업도 닫기
+document.getElementById('timelineClose').addEventListener('click', function() {{
+    document.getElementById('timelinePanel').style.display = 'none';
+    map.closePopup();
+}});
 
 var dtodLayer = L.layerGroup();
 var maxDtodVal = dtodData.reduce(function(m,d){{ return Math.max(m,d[2]); }}, 1);
@@ -1961,21 +2724,32 @@ gapsData.forEach(function(g) {{
 
 var gapListDiv = document.getElementById('gapList');
 gapsData.sort(function(a,b) {{ return (b.access_count + b.reservation_count) - (a.access_count + a.reservation_count); }});
-gapsData.forEach(function(g) {{
-    var row = document.createElement('div');
-    row.className = 'gap-row';
-    row.innerHTML = '<span class="gap-name">' + (g.name || '(' + g.lat.toFixed(3) + ', ' + g.lng.toFixed(3) + ')') + '</span>' +
-        '<span class="gap-cnt" style="font-size:10px">접속 ' + (g.access_count||0).toLocaleString() + '/월 | 예약 ' + (g.reservation_count||0).toLocaleString() + '/월</span>';
-    row.style.cursor = 'pointer';
-    row.addEventListener('click', function() {{ map.setView([g.lat, g.lng], 15); }});
-    gapListDiv.appendChild(row);
-}});
+function renderGapList(filterRegion) {{
+    gapListDiv.innerHTML = '';
+    gapsData.forEach(function(g) {{
+        if (filterRegion && g.region1 !== filterRegion) return;
+        var row = document.createElement('div');
+        row.className = 'gap-row';
+        row.innerHTML = '<span class="gap-name">' + (g.name || '(' + g.lat.toFixed(3) + ', ' + g.lng.toFixed(3) + ')') + '</span>' +
+            '<span class="gap-cnt" style="font-size:10px">접속 ' + (g.access_count||0).toLocaleString() + '/월 | 예약 ' + (g.reservation_count||0).toLocaleString() + '/월</span>';
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', function() {{ map.setView([g.lat, g.lng], 15); }});
+        gapListDiv.appendChild(row);
+    }});
+}}
+renderGapList('');
+var gapRegionSelect = document.getElementById('gapRegionSelect');
+if (gapRegionSelect) {{
+    gapRegionSelect.addEventListener('change', function() {{
+        renderGapList(this.value);
+    }});
+}}
 
 // 그린카 존 레이어
 var gcarLayer = L.layerGroup();
 gcarData.forEach(function(g) {{
     var size = Math.max(18, Math.min(32, 16 + g.total_cars * 1.5));
-    var html = '<div class="zone-pin" style="width:' + size + 'px;height:' + size + 'px;background:rgba(255,111,0,0.75);border-color:rgba(255,200,100,0.8);font-size:9px;">' + g.total_cars + '</div>';
+    var html = '<div class="zone-pin" style="width:' + size + 'px;height:' + size + 'px;background:rgba(239,83,80,0.75);border-color:rgba(255,180,180,0.8);font-size:9px;">' + g.total_cars + '</div>';
     var icon = L.divIcon({{
         className: 'zone-marker-wrap',
         html: html,
@@ -1984,12 +2758,47 @@ gcarData.forEach(function(g) {{
         popupAnchor: [0, -size/2]
     }});
     L.marker([g.lat, g.lng], {{ icon: icon }}).bindPopup(
-        '<div class="popup-title" style="color:#ff6f00">' + g.zone_name + '</div>' +
+        '<div class="popup-title" style="color:#ef5350">' + g.zone_name + '</div>' +
         '<div class="popup-row"><span class="popup-label">존 ID</span><span style="color:#666;font-family:monospace">' + g.zone_id + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">지역</span><span>' + g.sig_name + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">차량</span><b>' + g.total_cars + '대</b></div>' +
-        '<div style="margin-top:4px;font-size:10px;color:#ff6f00;font-weight:600;">그린카</div>'
+        '<div style="margin-top:4px;font-size:10px;color:#ef5350;font-weight:600;">그린카</div>'
     ).addTo(gcarLayer);
+}});
+
+// 폐쇄 존 레이어
+var closedLayer = L.layerGroup();
+closedData.forEach(function(cz) {{
+    var size = 16;
+    var html = '<div class="zone-pin" style="width:' + size + 'px;height:' + size + 'px;background:rgba(97,97,97,0.75);border-color:rgba(180,180,180,0.8);"></div>';
+    var icon = L.divIcon({{
+        className: 'zone-marker-wrap',
+        html: html,
+        iconSize: [size, size],
+        iconAnchor: [size/2, size/2],
+        popupAnchor: [0, -size/2]
+    }});
+    var perfHtml = '';
+    if (cz.revenue_per_car_28d > 0) {{
+        perfHtml = '<div class="popup-row"><span class="popup-label">대당매출(4주)</span><b style="color:#ffb74d">' + cz.revenue_per_car_28d.toLocaleString() + '원</b></div>' +
+            '<div class="popup-row"><span class="popup-label">대당GP(4주)</span><b>' + cz.gp_per_car_28d.toLocaleString() + '원</b></div>' +
+            '<div class="popup-row"><span class="popup-label">가동률</span><span>' + (cz.utilization_rate > 0 ? cz.utilization_rate.toFixed(1) + '%' : '-') + '</span></div>';
+    }} else {{
+        perfHtml = '<div class="popup-row"><span class="popup-label">실적</span><span style="color:#888">데이터 없음</span></div>';
+    }}
+    L.marker([cz.lat, cz.lng], {{ icon: icon }}).bindPopup(
+        '<div class="popup-title" style="color:#616161">' + cz.zone_name + '</div>' +
+        '<div class="popup-row"><span class="popup-label">존 ID</span><span style="color:#666;font-family:monospace">' + cz.zone_id + '</span></div>' +
+        '<div class="popup-row"><span class="popup-label">주차장</span><span>' + cz.parking_name + '</span></div>' +
+        '<div class="popup-row"><span class="popup-label">주소</span><span>' + cz.address + '</span></div>' +
+        (cz.first_date ? '<div class="popup-row"><span class="popup-label">운영기간</span><span>' + cz.first_date + ' ~ ' + cz.last_date + ' (' + cz.operation_days + '일)</span></div>' : '') +
+        '<div class="popup-row"><span class="popup-label">운영시 차량</span><b>' + (cz.hist_car_count > 0 ? cz.hist_car_count.toFixed(1) : '0') + '대</b></div>' +
+        perfHtml +
+        (cz.provider_name ? '<div class="popup-row"><span class="popup-label">사업자</span><span>' + cz.provider_name + '</span></div>' : '') +
+        (cz.settlement_type ? '<div class="popup-row"><span class="popup-label">정산</span><span>' + cz.settlement_type + '</span></div>' : '') +
+        (cz.price_per_car > 0 ? '<div class="popup-row"><span class="popup-label">주차비(대당/월)</span><span>' + cz.price_per_car.toLocaleString() + '원</span></div>' : '') +
+        '<div style="margin-top:4px;font-size:10px;color:#616161;font-weight:600;">폐쇄 존</div>'
+    ).addTo(closedLayer);
 }});
 
 // Market Share 테이블
@@ -2002,26 +2811,26 @@ function renderMarketShare() {{
     var totSocar = 0, totGcar = 0;
     marketShareData.forEach(function(d) {{ totSocar += d.socar_cars; totGcar += d.gcar_cars; }});
     var avgShare = (totSocar + totGcar) > 0 ? (totSocar / (totSocar + totGcar) * 100).toFixed(1) : '0';
-    var avgStyle = 'background:#262b3e;font-weight:700;color:#fff;';
-    var html = '<tr style="' + avgStyle + '">' +
-        '<td style="padding:4px 6px;border-bottom:2px solid #3a3f55;">경기도 전체</td>' +
-        '<td style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;">' + totSocar + '</td>' +
-        '<td style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;">-</td>' +
-        '<td style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;">' + totGcar + '</td>' +
-        '<td style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;">-</td>' +
-        '<td style="text-align:right;padding:4px 6px;border-bottom:2px solid #3a3f55;">' + avgShare + '%</td></tr>';
-    sorted.forEach(function(d) {{
-        var shareColor = d.socar_share < 40 ? 'color:#c62828;font-weight:700' : d.socar_share < 50 ? 'color:#e65100;font-weight:600' : d.socar_share >= 70 ? 'color:#2e7d32;font-weight:600' : '';
+    var html = '<tr style="background:#f0f4ff;">' +
+        '<td style="padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;color:#1a1a1a;">' + teamTotalLabel + '</td>' +
+        '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;color:#0064FF;">' + totSocar.toLocaleString() + '</td>' +
+        '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;color:#8b95a5;">-</td>' +
+        '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;color:#ef5350;">' + totGcar.toLocaleString() + '</td>' +
+        '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;color:#8b95a5;">-</td>' +
+        '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;">' + avgShare + '%</td></tr>';
+    sorted.forEach(function(d, idx) {{
+        var shareColor = d.socar_share < 40 ? '#c62828' : d.socar_share < 50 ? '#e65100' : d.socar_share >= 70 ? '#18a34a' : '#1a1a1a';
         var barW = d.socar_share.toFixed(0);
-        html += '<tr>' +
-            '<td style="padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.region2.replace(/\\u3000/g,' ') + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.socar_cars + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.socar_zones + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.gcar_cars + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45">' + d.gcar_zones + '</td>' +
-            '<td style="text-align:right;padding:4px 6px;border-bottom:1px solid #2a2f45;position:relative;' + shareColor + '">' +
-                '<div style="position:absolute;top:2px;bottom:2px;left:0;width:' + barW + '%;background:#42a5f5;opacity:0.2;border-radius:3px"></div>' +
-                d.socar_share.toFixed(1) + '%</td></tr>';
+        var rowBg = idx % 2 === 0 ? '' : 'background:#fafbfc;';
+        html += '<tr class="ms-row" style="' + rowBg + '">' +
+            '<td style="padding:8px 12px;border-bottom:1px solid #f0f1f3;font-weight:600;color:#1a1a1a;">' + d.region2.replace(/\\u3000/g,' ') + '</td>' +
+            '<td style="text-align:right;padding:8px 12px;border-bottom:1px solid #f0f1f3;font-weight:600;color:#0064FF;">' + d.socar_cars.toLocaleString() + '</td>' +
+            '<td style="text-align:right;padding:8px 12px;border-bottom:1px solid #f0f1f3;color:#8b95a5;">' + d.socar_zones + '</td>' +
+            '<td style="text-align:right;padding:8px 12px;border-bottom:1px solid #f0f1f3;font-weight:600;color:#ef5350;">' + d.gcar_cars.toLocaleString() + '</td>' +
+            '<td style="text-align:right;padding:8px 12px;border-bottom:1px solid #f0f1f3;color:#8b95a5;">' + d.gcar_zones + '</td>' +
+            '<td style="text-align:right;padding:8px 12px;border-bottom:1px solid #f0f1f3;position:relative;font-weight:700;color:' + shareColor + ';">' +
+                '<div style="position:absolute;top:3px;bottom:3px;left:0;width:' + barW + '%;background:linear-gradient(90deg,rgba(0,100,255,0.06),rgba(0,100,255,0.12));border-radius:4px;"></div>' +
+                '<span style="position:relative;">' + d.socar_share.toFixed(1) + '%</span></td></tr>';
     }});
     document.getElementById('marketShareBody').innerHTML = html;
 }}
@@ -2035,7 +2844,7 @@ document.querySelectorAll('#marketSharePanel th').forEach(function(th) {{
 }});
 renderMarketShare();
 
-var showAccess = true, showRes = true, showZones = true, showGap = false, showAnalysis = false, showDtod = false, showGcar = false, showMarketShare = false;
+var showAccess = true, showRes = true, showZones = true, showGap = false, showAnalysis = false, showDtod = false, showGcar = false, showClosed = false, showMarketShare = false;
 function styleBtn(btn, active) {{
     if (active) btn.classList.add('active');
     else btn.classList.remove('active');
@@ -2060,6 +2869,20 @@ document.getElementById('toggleZones').addEventListener('click', function() {{
     showZones = !showZones;
     showZones ? zoneLayer.addTo(map) : map.removeLayer(zoneLayer);
     styleBtn(this, showZones);
+    document.getElementById('zoneTypeFilter').style.display = showZones ? 'block' : 'none';
+    if (showZones) applyZoneTypeFilter();
+}});
+function applyZoneTypeFilter() {{
+    var checks = document.querySelectorAll('.zone-type-chk');
+    var allowed = [];
+    checks.forEach(function(c) {{ if (c.checked) allowed.push(parseInt(c.value)); }});
+    zoneLayer.clearLayers();
+    allZoneMarkers.forEach(function(m) {{
+        if (allowed.indexOf(m._zoneData.imaginary) >= 0) zoneLayer.addLayer(m);
+    }});
+}}
+document.querySelectorAll('.zone-type-chk').forEach(function(c) {{
+    c.addEventListener('change', applyZoneTypeFilter);
 }});
 document.getElementById('toggleGap').addEventListener('click', function() {{
     var wasOn = showGap;
@@ -2093,13 +2916,15 @@ function switchAnalysisTab(tab) {{
     document.getElementById('tabGrowth').classList.toggle('active', tab === 'growth');
     document.getElementById('tabDecline').classList.toggle('active', tab === 'decline');
     document.getElementById('analysisDesc').textContent = tab === 'growth'
-        ? '예약 점유율 상승 추세 지역 | 증감·그래프 = 경기도 대비 점유율 변화 (경기도 전체 행은 절대값)'
-        : '예약 점유율 하락 추세 지역 | 증감·그래프 = 경기도 대비 점유율 변화 (경기도 전체 행은 절대값)';
+        ? '예약 점유율 상승 추세 지역 | 증감·그래프 = ' + teamTotalLabel + ' 대비 점유율 변화 (' + teamTotalLabel + ' 행은 절대값)'
+        : '예약 점유율 하락 추세 지역 | 증감·그래프 = ' + teamTotalLabel + ' 대비 점유율 변화 (' + teamTotalLabel + ' 행은 절대값)';
     renderAnalysis();
 }}
 
 function renderAnalysis() {{
     var data = analysisTab === 'growth' ? analysisGrowth : analysisDecline;
+    var regionFilter = document.getElementById('analysisRegionFilter');
+    var filterR1 = regionFilter ? regionFilter.value : '';
     var statusOrd = analysisTab === 'growth'
         ? {{'점검 필요':0,'증차 검토':1,'대응 진행 중':2,'-':99}}
         : {{'점검 필요':0,'감차 검토':1,'대응 진행 중':2,'-':99}};
@@ -2107,8 +2932,8 @@ function renderAnalysis() {{
     var ggRow = null;
     var rest = [];
     data.forEach(function(d) {{
-        if (d.region2 === '경기도 전체') ggRow = d;
-        else rest.push(d);
+        if (d.region2 === teamTotalLabel) ggRow = d;
+        else if (!filterR1 || d.region1 === filterR1) rest.push(d);
     }});
     rest.sort(function(a, b) {{
         if (sortCol === 'region2') return sortAsc ? a.region2.localeCompare(b.region2) : b.region2.localeCompare(a.region2);
@@ -2125,12 +2950,12 @@ function renderAnalysis() {{
     var statusColors = {{'점검 필요':'#e53935','증차 검토':'#ff9800','감차 검토':'#ff9800','대응 진행 중':'#43a047'}};
     sorted.forEach(function(d, idx) {{
         var sc = statusColors[d.status] || '#8890a4';
-        var isGg = d.region2 === '경기도 전체';
-        var rowStyle = isGg ? 'background:#1a1f33;font-weight:600;' : '';
-        var borderStyle = isGg ? 'border-bottom:2px solid #3a3f55' : 'border-bottom:1px solid #2a2f45';
-        var accColor = d.access_growth >= 0 ? '#4fc3f7' : '#ef5350';
-        var resColor = d.res_growth >= 0 ? '#4fc3f7' : '#ef5350';
-        var carColor = d.car_growth >= 0 ? '#66bb6a' : '#ef5350';
+        var isGg = d.region2 === teamTotalLabel;
+        var rowStyle = isGg ? 'background:#f0f4ff;font-weight:700;' : '';
+        var borderStyle = isGg ? 'border-bottom:2px solid #e0e2e6' : 'border-bottom:1px solid #f0f1f3';
+        var accColor = d.access_growth >= 0 ? '#0064FF' : '#e53935';
+        var resColor = d.res_growth >= 0 ? '#0064FF' : '#e53935';
+        var carColor = d.car_growth >= 0 ? '#18a34a' : '#e53935';
         html += '<tr style="' + rowStyle + '">' +
             '<td style="padding:4px 6px;' + borderStyle + ';white-space:nowrap">' + d.region2.replace(/\\u3000/g,' ') + '</td>' +
             '<td style="text-align:right;padding:4px 6px;' + borderStyle + '">' + d.access_weekly.toLocaleString() + '</td>' +
@@ -2142,7 +2967,7 @@ function renderAnalysis() {{
             '<td style="text-align:right;padding:4px 6px;' + borderStyle + '">' + d.cars + '</td>' +
             '<td style="padding:2px 4px;' + borderStyle + '">' + sparkSvg(d.car_trend, carColor) + '</td>' +
             '<td style="text-align:right;padding:4px 6px;' + borderStyle + ';color:' + carColor + '">' + (d.car_growth >= 0 ? '+' : '') + d.car_growth.toFixed(1) + '%</td>' +
-            (isGg ? '<td style="text-align:center;padding:4px 6px;' + borderStyle + ';color:#6b7394">기준선</td>' :
+            (isGg ? '<td style="text-align:center;padding:4px 6px;' + borderStyle + ';color:#8b95a5;font-weight:600">기준선</td>' :
             '<td style="text-align:center;padding:4px 6px;' + borderStyle + '"><span style="background:' + sc + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap;">' + d.status + '</span></td>') +
             '</tr>';
     }});
@@ -2181,6 +3006,12 @@ document.getElementById('toggleGcar').addEventListener('click', function() {{
     styleBtn(this, showGcar);
 }});
 
+document.getElementById('toggleClosed').addEventListener('click', function() {{
+    showClosed = !showClosed;
+    showClosed ? closedLayer.addTo(map) : map.removeLayer(closedLayer);
+    styleBtn(this, showClosed);
+}});
+
 document.getElementById('toggleMarketShare').addEventListener('click', function() {{
     var wasOn = showMarketShare;
     hidePanels();
@@ -2195,7 +3026,161 @@ styleBtn(document.getElementById('toggleZones'), true);
 styleBtn(document.getElementById('toggleGap'), false);
 styleBtn(document.getElementById('toggleAnalysis'), false);
 styleBtn(document.getElementById('toggleGcar'), false);
+styleBtn(document.getElementById('toggleClosed'), false);
 styleBtn(document.getElementById('toggleMarketShare'), false);
+
+// ── 측정 도구 (거리 재기 + 반경 측정) ──
+(function() {{
+    var mode = null; // 'distance' | 'radius'
+    var measureLayer = L.layerGroup().addTo(map);
+    var guide = document.getElementById('measureGuide');
+    var distBtn = document.getElementById('toolDistance');
+    var radiusBtn = document.getElementById('toolRadius');
+    var points = [], polyline = null;
+    var radiusCenter = null, radiusCircle = null, radiusLine = null;
+
+    function hav(lat1, lng1, lat2, lng2) {{
+        var R = 6371000, dLat = (lat2-lat1)*Math.PI/180, dLng = (lng2-lng1)*Math.PI/180;
+        var a = Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
+        return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+    }}
+    function fmt(m) {{ return m>=1000?(m/1000).toFixed(2)+'km':Math.round(m)+'m'; }}
+
+    function clearAll() {{
+        measureLayer.clearLayers();
+        points=[]; polyline=null; radiusCenter=null; radiusCircle=null; radiusLine=null;
+    }}
+
+    function disableMarkerClicks() {{
+        zoneLayer.eachLayer(function(l) {{ if (l._icon) l._icon.style.pointerEvents = 'none'; }});
+        closedLayer.eachLayer(function(l) {{ if (l._icon) l._icon.style.pointerEvents = 'none'; }});
+        gcarLayer.eachLayer(function(l) {{ if (l._icon) l._icon.style.pointerEvents = 'none'; }});
+    }}
+    function enableMarkerClicks() {{
+        zoneLayer.eachLayer(function(l) {{ if (l._icon) l._icon.style.pointerEvents = ''; }});
+        closedLayer.eachLayer(function(l) {{ if (l._icon) l._icon.style.pointerEvents = ''; }});
+        gcarLayer.eachLayer(function(l) {{ if (l._icon) l._icon.style.pointerEvents = ''; }});
+    }}
+
+    function makeMeasureCard(label, value, color) {{
+        return '<div style="background:#fff;border-radius:10px;padding:10px 14px;box-shadow:0 2px 12px rgba(0,0,0,0.12);min-width:120px;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+            '<span style="font-size:11px;color:#5a6270;font-weight:600;">' + label + '</span>' +
+            '<span style="font-size:13px;color:' + color + ';font-weight:800;">' + value + '</span></div>' +
+            '<div class="measure-delete-btn" style="display:flex;align-items:center;justify-content:center;gap:4px;padding:5px 0;border-top:1px solid #f0f1f3;cursor:pointer;font-size:11px;color:#8b95a5;font-weight:500;">' +
+            '<span style="font-size:12px;">✂</span> 지우기</div></div>';
+    }}
+
+    function stopTool() {{
+        mode=null;
+        map.off('click', onDistClick); map.off('dblclick', onDistDbl);
+        map.off('click', onRadiusClick); map.off('mousemove', onRadiusMove);
+        map.doubleClickZoom.enable();
+        document.getElementById('map').style.cursor='';
+        guide.style.display='none';
+        distBtn.style.background='#fff'; distBtn.style.color='#5a6270';
+        radiusBtn.style.background='#fff'; radiusBtn.style.color='#5a6270';
+        enableMarkerClicks();
+    }}
+
+    function activeStyle(btn) {{
+        btn.style.background='#0064FF'; btn.style.color='#fff';
+    }}
+
+    function bindDeleteBtn(marker) {{
+        setTimeout(function() {{
+            var el = marker.getElement();
+            if (!el) return;
+            var btn = el.querySelector('.measure-delete-btn');
+            if (btn) btn.addEventListener('click', function(ev) {{
+                ev.stopPropagation();
+                clearAll();
+            }});
+        }}, 50);
+    }}
+
+    // ─ 거리 재기 ─
+    function onDistClick(e) {{
+        points.push(e.latlng);
+        L.circleMarker(e.latlng, {{ radius:5, color:'#6366f1', fillColor:'#6366f1', fillOpacity:1, weight:2 }}).addTo(measureLayer);
+        if (points.length > 1) {{
+            var prev=points[points.length-2], cur=e.latlng;
+            var seg=hav(prev.lat,prev.lng,cur.lat,cur.lng);
+            var total=0; for(var i=1;i<points.length;i++) total+=hav(points[i-1].lat,points[i-1].lng,points[i].lat,points[i].lng);
+            if (polyline) measureLayer.removeLayer(polyline);
+            polyline=L.polyline(points,{{color:'#6366f1',weight:3,dashArray:'8,6',opacity:0.9}}).addTo(measureLayer);
+            // 구간 거리 (작은 라벨)
+            L.marker([(prev.lat+cur.lat)/2,(prev.lng+cur.lng)/2],{{ icon:L.divIcon({{ className:'', iconSize:[0,0], html:'<div style="position:relative;left:-50%;background:#fff;color:#6366f1;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;box-shadow:0 1px 6px rgba(0,0,0,0.12);white-space:nowrap;display:inline-block;">'+fmt(seg)+'</div>' }}) }}).addTo(measureLayer);
+            // 총 거리 카드
+            if (points.length > 2 && measureLayer._lastTotalLabel) measureLayer.removeLayer(measureLayer._lastTotalLabel);
+            var tl=L.marker(cur,{{ icon:L.divIcon({{ className:'', iconSize:[0,0], html:'<div style="position:relative;left:-50%;top:8px;">' + makeMeasureCard('총거리', fmt(total), '#6366f1') + '</div>' }}) }}).addTo(measureLayer);
+            bindDeleteBtn(tl);
+            measureLayer._lastTotalLabel = tl;
+        }}
+    }}
+    function onDistDbl(e) {{ L.DomEvent.stopPropagation(e); stopTool(); }}
+
+    // ─ 반경 측정 ─
+    function onRadiusClick(e) {{
+        if (!radiusCenter) {{
+            radiusCenter = e.latlng;
+            L.circleMarker(e.latlng, {{ radius:5, color:'#6366f1', fillColor:'#6366f1', fillOpacity:1, weight:2 }}).addTo(measureLayer);
+            guide.innerHTML = '지도를 클릭하여 반경 확정 · ESC 취소';
+        }} else {{
+            var dist = hav(radiusCenter.lat, radiusCenter.lng, e.latlng.lat, e.latlng.lng);
+            if (radiusCircle) measureLayer.removeLayer(radiusCircle);
+            if (radiusLine) measureLayer.removeLayer(radiusLine);
+            if (radiusPreviewLabel) measureLayer.removeLayer(radiusPreviewLabel);
+            radiusCircle = L.circle(radiusCenter, {{ radius:dist, color:'#6366f1', fillColor:'#6366f1', fillOpacity:0.06, weight:2, dashArray:'6,4' }}).addTo(measureLayer);
+            radiusLine = L.polyline([radiusCenter, e.latlng], {{ color:'#6366f1', weight:2, dashArray:'6,4' }}).addTo(measureLayer);
+            L.circleMarker(e.latlng, {{ radius:4, color:'#6366f1', fillColor:'#6366f1', fillOpacity:1, weight:2 }}).addTo(measureLayer);
+            // 반경 카드
+            var rm = L.marker([(radiusCenter.lat+e.latlng.lat)/2,(radiusCenter.lng+e.latlng.lng)/2], {{ icon:L.divIcon({{ className:'', iconSize:[0,0], html:'<div style="position:relative;left:-50%;">' + makeMeasureCard('총반경', fmt(dist), '#6366f1') + '</div>' }}) }}).addTo(measureLayer);
+            bindDeleteBtn(rm);
+            map.off('mousemove', onRadiusMove);
+            stopTool();
+        }}
+    }}
+    var radiusPreviewLabel = null;
+    function onRadiusMove(e) {{
+        if (!radiusCenter) return;
+        var dist = hav(radiusCenter.lat, radiusCenter.lng, e.latlng.lat, e.latlng.lng);
+        if (radiusCircle) measureLayer.removeLayer(radiusCircle);
+        if (radiusLine) measureLayer.removeLayer(radiusLine);
+        if (radiusPreviewLabel) measureLayer.removeLayer(radiusPreviewLabel);
+        radiusCircle = L.circle(radiusCenter, {{ radius:dist, color:'#6366f1', fillColor:'#6366f1', fillOpacity:0.06, weight:2, dashArray:'6,4' }}).addTo(measureLayer);
+        radiusLine = L.polyline([radiusCenter, e.latlng], {{ color:'#6366f1', weight:2, dashArray:'6,4', opacity:0.7 }}).addTo(measureLayer);
+        radiusPreviewLabel = L.marker([(radiusCenter.lat+e.latlng.lat)/2,(radiusCenter.lng+e.latlng.lng)/2], {{ icon:L.divIcon({{ className:'', iconSize:[0,0], html:'<div style="position:relative;left:-50%;background:#fff;color:#1a1a1a;padding:8px 14px;border-radius:10px;font-size:12px;font-weight:700;box-shadow:0 2px 12px rgba(0,0,0,0.12);white-space:nowrap;display:inline-block;">반경 <span style="color:#6366f1;">' + fmt(dist) + '</span></div>' }}) }}).addTo(measureLayer);
+    }}
+
+    distBtn.addEventListener('click', function() {{
+        if (mode === 'distance') {{ stopTool(); return; }}
+        stopTool(); clearAll(); mode = 'distance';
+        activeStyle(distBtn);
+        disableMarkerClicks();
+        map.doubleClickZoom.disable();
+        map.on('click', onDistClick); map.on('dblclick', onDistDbl);
+        document.getElementById('map').style.cursor = 'crosshair';
+        guide.innerHTML = '클릭으로 포인트 추가 · 더블클릭 종료 · ESC 취소';
+        guide.style.display = 'block';
+    }});
+
+    radiusBtn.addEventListener('click', function() {{
+        if (mode === 'radius') {{ stopTool(); return; }}
+        stopTool(); clearAll(); mode = 'radius';
+        activeStyle(radiusBtn);
+        disableMarkerClicks();
+        map.doubleClickZoom.disable();
+        map.on('click', onRadiusClick); map.on('mousemove', onRadiusMove);
+        document.getElementById('map').style.cursor = 'crosshair';
+        guide.innerHTML = '중심점 클릭 · ESC 취소';
+        guide.style.display = 'block';
+    }});
+
+    document.addEventListener('keydown', function(e) {{
+        if (e.key === 'Escape' && mode) {{ stopTool(); clearAll(); }}
+    }});
+}})();
 
 // 업데이트 공통 함수
 function doUpdate(endpoint, btn, label) {{
@@ -2203,7 +3188,7 @@ function doUpdate(endpoint, btn, label) {{
     btn.disabled = true;
     btn.classList.add('updating');
     btn.textContent = label + ' 중...';
-    fetch(endpoint, {{ method: 'POST' }})
+    fetch(endpoint, {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify({{team_id: TEAM_ID}}) }})
         .then(function(r) {{ return r.json(); }})
         .then(function(data) {{
             if (data.success) {{
@@ -2260,32 +3245,32 @@ function showTimeline(zoneId, zoneName) {{
     var dayNames = ['일','월','화','수','목','금','토'];
     // 테이블 생성
     var numDays = days.length;
-    var html = '<table style="border-collapse:collapse;font-size:10px;width:100%;min-width:600px;color:#e0e0e0;table-layout:fixed;">';
+    var html = '<table style="border-collapse:collapse;font-size:10px;width:100%;min-width:600px;color:#1a1a1a;table-layout:fixed;">';
     // colgroup으로 너비 고정
     html += '<colgroup><col style="width:110px;min-width:110px;">';
     for (var ci = 0; ci < numDays; ci++) html += '<col style="width:' + (100/numDays).toFixed(2) + '%;">';
     html += '</colgroup>';
-    html += '<thead><tr><th style="padding:2px 4px;border:1px solid #2a2f45;position:sticky;left:0;background:#1e2233;z-index:1;color:#8890a4;">차량</th>';
+    html += '<thead><tr><th style="padding:4px 6px;border-bottom:2px solid #e8eaed;position:sticky;left:0;background:#fff;z-index:1;color:#8b95a5;font-weight:600;">차량</th>';
     days.forEach(function(day) {{
         var mm = String(day.getMonth()+1).padStart(2,'0');
         var dd = String(day.getDate()).padStart(2,'0');
         var dn = dayNames[day.getDay()];
         var isToday = day.toDateString() === now.toDateString();
         var isWeekend = day.getDay() === 0 || day.getDay() === 6;
-        var bg = isToday ? '#3a3520' : isWeekend ? '#35202a' : '#1e2233';
-        html += '<th style="padding:2px 1px;border:1px solid #2a2f45;font-size:9px;background:' + bg + ';color:#8890a4;">' + mm + '-' + dd + '<br>(' + dn + ')</th>';
+        var bg = isToday ? '#fffde7' : isWeekend ? '#fff5f5' : '#fff';
+        html += '<th style="padding:3px 1px;border-bottom:2px solid #e8eaed;font-size:9px;background:' + bg + ';color:#8b95a5;font-weight:600;">' + mm + '-' + dd + '<br>(' + dn + ')</th>';
     }});
     html += '</tr></thead><tbody>';
     carOrder.forEach(function(carId) {{
         var car = cars[carId];
-        html += '<tr><td style="padding:3px 4px;border:1px solid #2a2f45;white-space:nowrap;position:sticky;left:0;background:#1e2233;z-index:1;font-size:9px;"><b style="color:#fff">' + car.car_name + '</b><br><span style="color:#6b7394">' + car.car_num + '</span></td>';
+        html += '<tr><td style="padding:4px 6px;border-bottom:1px solid #f0f1f3;white-space:nowrap;position:sticky;left:0;background:#fff;z-index:1;font-size:9px;"><b style="color:#1a1a1a">' + car.car_name + '</b><br><span style="color:#8b95a5">' + car.car_num + '</span></td>';
         days.forEach(function(day, di) {{
             var dayStart = new Date(day); dayStart.setHours(0,0,0,0);
             var dayEnd = new Date(day); dayEnd.setHours(23,59,59,999);
             var isToday = day.toDateString() === now.toDateString();
             var isWeekend = day.getDay() === 0 || day.getDay() === 6;
-            var bg = isToday ? '#2a2820' : isWeekend ? '#2a2025' : '#262b3e';
-            html += '<td style="padding:0;border-top:1px solid #2a2f45;border-bottom:1px solid #2a2f45;border-left:1px solid #1e2538;border-right:1px solid #1e2538;height:28px;position:relative;overflow:visible;background:' + bg + '">';
+            var bg = isToday ? '#fffde7' : isWeekend ? '#fff5f5' : '#fafbfc';
+            html += '<td style="padding:0;border-bottom:1px solid #f0f1f3;border-left:1px solid #f4f5f7;border-right:1px solid #f4f5f7;height:30px;position:relative;overflow:visible;background:' + bg + '">';
             car.reservations.forEach(function(rv) {{
                 var rs = new Date(rv.start.replace(' ', 'T'));
                 var re = new Date(rv.end.replace(' ', 'T'));
@@ -2310,7 +3295,7 @@ function showTimeline(zoneId, zoneName) {{
     }});
     html += '</tbody></table>';
     // 범례
-    html += '<div style="margin-top:8px;display:flex;gap:10px;font-size:10px;flex-wrap:wrap;color:#8890a4;">';
+    html += '<div style="margin-top:10px;display:flex;gap:12px;font-size:10px;flex-wrap:wrap;color:#8b95a5;font-weight:500;">';
     [['handle','일반','#5c6bc0'],['d2d_round','부름왕복','#43a047'],['d2d_oneway','부름편도','#00897b'],['block','블락','#555c6e']].forEach(function(x) {{
         html += '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + x[2] + ';vertical-align:middle;margin-right:3px;"></span>' + x[1] + '</span>';
     }});
@@ -2366,134 +3351,376 @@ function showTimeline(zoneId, zoneName) {{
             }})
         }}).addTo(map);
 
-        // 로딩 표시
-        simContent.innerHTML = '<div style="text-align:center;padding:30px 0;"><div class="sim-marker-pin" style="display:inline-flex;width:40px;height:40px;font-size:16px;">?</div><div style="margin-top:12px;color:#8890a4;font-size:12px;">BQ 쿼리 실행 중...</div><div style="color:#6b7394;font-size:10px;margin-top:4px;">반경 1km 실시간 접속/예약 집계 중</div></div>';
-        simPanel.style.display = 'block';
+        // 로딩 표시 (팝업은 숨긴 상태, 오버레이만 표시)
+        simPanel.style.display = 'none';
         simOverlay.style.display = 'block';
+        // 로딩 토스트
+        var loadingToast = document.createElement('div');
+        loadingToast.id = 'simLoadingToast';
+        loadingToast.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2001;background:#fff;border-radius:16px;padding:32px 40px;box-shadow:0 8px 32px rgba(0,0,0,0.15);text-align:center;';
+        loadingToast.innerHTML = '<div class="sim-marker-pin" style="display:inline-flex;width:44px;height:44px;font-size:18px;margin-bottom:14px;">?</div><div id="simLoadingMsg" style="color:#1a1a1a;font-size:14px;font-weight:700;">시뮬레이션 진행 중</div><div id="simLoadingSub" style="color:#8b95a5;font-size:11px;margin-top:4px;">반경 500m 실시간 수요 집계 중...</div>';
+        document.body.appendChild(loadingToast);
 
-        // 서버 API 호출 (로컬 or ngrok이면 상대경로, GitHub Pages면 ngrok URL)
         var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('.ngrok-free.dev'));
         var simApiBase = isLocal ? '' : '{ngrok_url}';
+
+        // 1단계: BQ 시뮬레이션
         fetch(simApiBase + '/api/simulate', {{
             method: 'POST',
             headers: {{ 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' }},
-            body: JSON.stringify({{ lat: lat, lng: lng, radius: 1.0 }})
+            body: JSON.stringify({{ lat: lat, lng: lng, radius: 0.5, team_id: TEAM_ID }})
         }})
         .then(function(resp) {{
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             return resp.json();
         }})
         .then(function(d) {{
-            if (d.error) {{ simContent.innerHTML = '<div style="color:#e74c3c;padding:20px;text-align:center;">오류: ' + d.error + '</div>'; return; }}
-            renderSimResult(d);
+            if (d.error) throw new Error(d.error);
+            // 2단계: AI 분석
+            document.getElementById('simLoadingMsg').textContent = 'AI 분석 중';
+            document.getElementById('simLoadingSub').textContent = 'GPT · Claude 종합 평가 생성 중...';
+            return fetch(simApiBase + '/api/simulate-eval', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' }},
+                body: JSON.stringify(Object.assign({{}}, d, {{team_id: TEAM_ID}}))
+            }})
+            .then(function(r) {{ return r.json(); }})
+            .then(function(ev) {{ return {{ sim: d, eval: ev }}; }})
+            .catch(function() {{ return {{ sim: d, eval: null }}; }});
+        }})
+        .then(function(result) {{
+            // 로딩 토스트 제거, 결과 팝업 표시
+            var toast = document.getElementById('simLoadingToast');
+            if (toast) toast.remove();
+            renderSimResult(result.sim, result.eval);
+            simPanel.style.display = 'block';
         }})
         .catch(function(err) {{
-            simContent.innerHTML = '<div style="color:#e74c3c;padding:20px;text-align:center;">서버 연결 실패<br><span style="font-size:10px;color:#8890a4;">시뮬레이션 서버가 실행 중인지 확인하세요</span></div>';
+            var toast = document.getElementById('simLoadingToast');
+            if (toast) toast.remove();
+            simContent.innerHTML = '<div style="color:#e74c3c;padding:20px;text-align:center;font-weight:600;">시뮬레이션 실패<br><span style="font-size:10px;color:#8b95a5;font-weight:400;">' + err.message + '</span></div>';
+            simPanel.style.display = 'block';
         }});
     }}
 
-    function renderSimResult(d) {{
-        var left = '';
-        left += '<div class="sim-row"><span class="sim-label">좌표</span><span class="sim-value" style="font-size:11px;font-family:monospace;">' + d.lat.toFixed(5) + ', ' + d.lng.toFixed(5) + '</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">지역</span><span class="sim-value" style="font-size:11px;">' + d.region2 + ' ' + d.region3 + '</span></div>';
-        if (d.nearest_zone) {{
-            left += '<div class="sim-row"><span class="sim-label">최근접 존</span><span class="sim-value" style="font-size:11px;">' + d.nearest_zone + ' (' + d.nearest_zone_dist_km + 'km)</span></div>';
-        }}
+    function renderSimResult(d, ev) {{
+        var gradeColors = {{ 'S': '#0064FF', 'A': '#18a34a', 'B': '#e07800', 'F': '#e53935' }};
+        var gradeBgs = {{ 'S': '#f0f4ff', 'A': '#edfcf2', 'B': '#fff7ed', 'F': '#fef2f2' }};
+        var gc = gradeColors[d.demand_grade] || '#8b95a5';
+        var gb = gradeBgs[d.demand_grade] || '#f7f8fa';
 
+        // AI 추천 합의 계산
+        function checkRecommend(text) {{
+            if (!text) return null;
+            var first = text.split('\\n')[0].trim();
+            if (first.indexOf('비추천') >= 0 || first.indexOf('추천 X') >= 0 || first.indexOf('추천X') >= 0) return false;
+            if (first.indexOf('추천 O') >= 0 || first.indexOf('추천O') >= 0 || first.indexOf('추천합니다') >= 0) return true;
+            return null;
+        }}
+        var gptRec = ev ? checkRecommend(ev.gpt) : null;
+        var claudeRec = ev ? checkRecommend(ev.claude) : null;
+        var aiConsensus = 'unknown';
+        if (gptRec === true && claudeRec === true) aiConsensus = 'recommend';
+        else if (gptRec === false && claudeRec === false) aiConsensus = 'not_recommend';
+        else if (gptRec !== null || claudeRec !== null) aiConsensus = 'hold';
+
+        // ── 전체 2컬럼 시작 ──
+        var html = '<div style="display:flex;gap:20px;align-items:flex-start;">';
+        // ── 좌측 ──
+        html += '<div style="flex:1;min-width:0;">';
+
+        // 최종 결과 카드
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">';
+
+        // 수요 등급
+        html += '<div style="background:' + gb + ';border-radius:12px;padding:14px 16px;text-align:center;">';
+        html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-bottom:6px;">수요 등급</div>';
+        html += '<div style="font-size:32px;font-weight:900;color:' + gc + ';line-height:1;">' + d.demand_grade + '</div>';
+        html += '<div style="font-size:10px;color:#8b95a5;margin-top:4px;">상위 ' + (100 - d.demand_percentile).toFixed(0) + '%</div>';
+        html += '</div>';
+
+        // 예상 주간 예약
+        html += '<div style="background:#f7f8fa;border-radius:12px;padding:14px 16px;text-align:center;">';
+        html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-bottom:6px;">예상 주간 예약</div>';
+        html += '<div style="font-size:28px;font-weight:900;color:#1a1a1a;line-height:1;">' + d.est_weekly_res.toLocaleString() + '<span style="font-size:14px;font-weight:600;">건</span></div>';
+        html += '<div style="font-size:10px;color:#8b95a5;margin-top:4px;">접속 ' + d.base_res + ' + 부름 ' + d.dtod_additional + '</div>';
+        html += '</div>';
+
+        // 추천 공급대수
+        html += '<div style="background:#f0f4ff;border-radius:12px;padding:14px 16px;text-align:center;">';
+        html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-bottom:6px;">추천 공급대수</div>';
+        html += '<div style="font-size:28px;font-weight:900;color:#0064FF;line-height:1;">' + d.recommended_cars + '<span style="font-size:14px;font-weight:600;">대</span></div>';
+        html += '<div style="font-size:10px;color:#8b95a5;margin-top:4px;">적정 ' + d.raw_recommended_cars + ' - 카니발 ' + d.cannibal_cars + '</div>';
+        html += '</div>';
+
+        // AI 종합 추천
+        var aiBg, aiColor, aiLabel, aiIcon;
+        if (aiConsensus === 'recommend') {{ aiBg = '#edfcf2'; aiColor = '#18a34a'; aiLabel = '개설 추천'; aiIcon = 'O'; }}
+        else if (aiConsensus === 'not_recommend') {{ aiBg = '#fef2f2'; aiColor = '#e53935'; aiLabel = '개설 비추천'; aiIcon = 'X'; }}
+        else if (aiConsensus === 'hold') {{ aiBg = '#fffbeb'; aiColor = '#d97706'; aiLabel = '보류'; aiIcon = '△'; }}
+        else {{ aiBg = '#f7f8fa'; aiColor = '#8b95a5'; aiLabel = 'AI 판단 불가'; aiIcon = '-'; }}
+        html += '<div style="background:' + aiBg + ';border-radius:12px;padding:14px 16px;text-align:center;">';
+        html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-bottom:6px;">AI 추천</div>';
+        html += '<div style="font-size:28px;font-weight:900;color:' + aiColor + ';line-height:1;">' + aiIcon + '</div>';
+        html += '<div style="font-size:10px;color:' + aiColor + ';margin-top:4px;font-weight:600;">' + aiLabel + '</div>';
+        html += '</div></div>';
+
+        // 상세 정보
+        html += '<div style="font-size:11px;color:#8b95a5;margin-bottom:6px;">' + d.region2 + ' ' + d.region3 + ' · ' + d.lat.toFixed(5) + ', ' + d.lng.toFixed(5);
+        if (d.nearest_zone) html += ' · 최근접: ' + d.nearest_zone + ' (' + d.nearest_zone_dist_km + 'km)';
+        html += '</div>';
+
+        // 과거 존 이력
         if (d.hist_zones && d.hist_zones.length > 0) {{
-            left += '<div class="sim-section" style="background:#2a2040;border-radius:6px;padding:8px 10px;margin-top:8px;">';
-            left += '<div class="sim-section-title" style="color:#b388ff;">과거 존 이력 (반경 300m)</div>';
-            d.hist_zones.forEach(function(hz) {{
-                left += '<div style="margin-bottom:6px;">';
-                left += '<div style="font-weight:600;color:#e0e0e0;font-size:12px;">' + hz.zone_name + '</div>';
-                left += '<div style="font-size:10px;color:#8890a4;">' + hz.first_date + ' ~ ' + hz.last_date + ' (' + hz.operation_days + '일 운영, ' + hz.total_cars_ever + '대)</div>';
-                left += '<div style="font-size:11px;margin-top:2px;">';
-                left += '<span style="color:#8890a4;">대당매출</span> <b style="color:#ffb74d;">' + (hz.revenue_per_car_28d > 0 ? hz.revenue_per_car_28d.toLocaleString() + '원' : '-') + '</b>';
-                left += ' · <span style="color:#8890a4;">대당GP</span> <b>' + (hz.gp_per_car_28d > 0 ? hz.gp_per_car_28d.toLocaleString() + '원' : '-') + '</b>';
-                left += ' · <span style="color:#8890a4;">가동률</span> <b>' + (hz.avg_utilization > 0 ? hz.avg_utilization + '%' : '-') + '</b>';
-                left += '</div></div>';
-            }});
-            left += '<div style="font-size:9px;color:#6b7394;margin-top:4px;">※ 과거 실적 30% + 현재 추정 70% 블렌딩 반영</div>';
-            left += '</div>';
+            var normalZones = d.hist_zones.filter(function(hz) {{ return !hz.is_d2d_call; }});
+            var callZones = d.hist_zones.filter(function(hz) {{ return hz.is_d2d_call; }});
+            html += '<div style="background:#f5f0ff;border-radius:12px;padding:14px 16px;margin:10px 0;border:1px solid #e8dff5;">';
+            html += '<div style="font-size:10px;font-weight:700;color:#7c3aed;margin-bottom:8px;">과거 존 이력 (반경 300m) · 대당매출 30% 블렌딩 반영</div>';
+            if (normalZones.length > 0) {{
+                html += '<div style="font-size:10px;font-weight:700;color:#5a6270;margin-bottom:6px;">일반존</div>';
+                normalZones.forEach(function(hz) {{
+                    html += '<div style="font-size:12px;margin-bottom:6px;line-height:1.5;"><b>' + hz.zone_name + '</b> ' + hz.first_date + '~' + hz.last_date + ' (' + hz.operation_days + '일) · 대당매출 <b style="color:#e07800">' + (hz.revenue_per_car_28d > 0 ? hz.revenue_per_car_28d.toLocaleString() + '원' : '-') + '</b>/4주</div>';
+                }});
+            }}
+            if (callZones.length > 0) {{
+                if (normalZones.length > 0) html += '<div style="border-top:1px solid #e8dff5;margin:8px 0;"></div>';
+                html += '<div style="font-size:10px;font-weight:700;color:#5a6270;margin-bottom:6px;">부름호출존</div>';
+                callZones.forEach(function(hz) {{
+                    html += '<div style="font-size:12px;margin-bottom:6px;line-height:1.5;"><b>' + hz.zone_name + '</b> ' + hz.first_date + '~' + hz.last_date + ' (' + hz.operation_days + '일) · 월평균 <b style="color:#0064FF">' + (hz.monthly_avg_res > 0 ? hz.monthly_avg_res.toLocaleString() + '건' : '-') + '</b> · 건당 <b style="color:#e07800">' + (hz.revenue_per_res > 0 ? hz.revenue_per_res.toLocaleString() + '원' : '-') + '</b></div>';
+                }});
+            }}
+            html += '</div>';
         }}
 
-        left += '<div class="sim-section"><div class="sim-section-title">반경 1km 수요 — 주간 (90일 기준)</div>';
-        left += '<div class="sim-row"><span class="sim-label">앱 접속</span><span class="sim-value">' + d.weekly_access.toLocaleString() + '</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">예약 생성</span><span class="sim-value">' + d.weekly_res.toLocaleString() + '</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">부름 호출</span><span class="sim-value">' + d.weekly_dtod.toLocaleString() + '</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">전환율 (' + d.conv_level + ')</span><span class="sim-value">' + (d.conv_rate * 100).toFixed(2) + '%</span></div>';
-        left += '</div>';
+        // 수요 + 벤치마크
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
+        html += '<div style="background:#f7f8fa;border-radius:10px;padding:10px 12px;">';
+        html += '<div style="font-size:10px;font-weight:700;color:#8b95a5;margin-bottom:6px;">반경 500m 수요 (주간)</div>';
+        html += '<div class="sim-row"><span class="sim-label">접속</span><span class="sim-value">' + d.weekly_access.toLocaleString() + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">예약</span><span class="sim-value">' + d.weekly_res.toLocaleString() + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">부름</span><span class="sim-value">' + d.weekly_dtod.toLocaleString() + '</span></div>';
+        var convCtx = d.conv_rank ? ' <span style="font-size:9px;color:#8b95a5;font-weight:400;">(' + d.region2 + ' ' + d.conv_total_r3 + '개 중 ' + d.conv_rank + '위, 평균 ' + d.r2_avg_conv.toFixed(2) + '%)</span>' : '';
+        html += '<div class="sim-row"><span class="sim-label">전환율</span><span class="sim-value">' + (d.conv_rate * 100).toFixed(2) + '%' + convCtx + '</span></div>';
+        html += '</div>';
+        html += '<div style="background:#f7f8fa;border-radius:10px;padding:10px 12px;">';
+        html += '<div style="font-size:10px;font-weight:700;color:#8b95a5;margin-bottom:6px;">인근 벤치마크 (3km, ' + d.bench_zone_count + '존)</div>';
+        html += '<div class="sim-row"><span class="sim-label">대당매출</span><span class="sim-value">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">대당GP</span><span class="sim-value">' + (d.est_gp_per_car > 0 ? d.est_gp_per_car.toLocaleString() + '원' : '-') + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">가동률</span><span class="sim-value">' + (d.avg_util > 0 ? d.avg_util.toFixed(1) + '%' : '-') + '</span></div>';
+        html += '<div class="sim-row"><span class="sim-label">건당매출</span><span class="sim-value">' + (d.revenue_per_res > 0 ? d.revenue_per_res.toLocaleString() + '원' : '-') + '</span></div>';
+        html += '</div></div>';
 
-        left += '<div class="sim-section"><div class="sim-section-title">인근 벤치마크 (반경 3km, ' + d.bench_zone_count + '개 존)</div>';
-        left += '<div class="sim-row"><span class="sim-label">평균 대당매출 (4주)</span><span class="sim-value">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">평균 대당GP (4주)</span><span class="sim-value">' + (d.est_gp_per_car > 0 ? d.est_gp_per_car.toLocaleString() + '원' : '-') + '</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">평균 가동률</span><span class="sim-value">' + (d.avg_util > 0 ? d.avg_util.toFixed(1) + '%' : '-') + '</span></div>';
-        left += '</div>';
+        // 주차비 분석
+        if (d.parking_mid > 0) {{
+            html += '<div style="background:#f7f8fa;border-radius:10px;padding:12px 14px;margin-top:8px;">';
+            html += '<div style="font-size:10px;font-weight:700;color:#8b95a5;margin-bottom:8px;">주차비 분석</div>';
+            html += '<div class="sim-row"><span class="sim-label">인근 평균 주차비</span><span class="sim-value">' + (d.bench_avg_parking > 0 ? d.bench_avg_parking.toLocaleString() + '원/월' : '-') + ' <span style="font-size:9px;color:#8b95a5;font-weight:400;">(' + d.bench_parking_count + '개 존)</span></span></div>';
+            if (d.hist_avg_parking > 0) {{
+                html += '<div class="sim-row"><span class="sim-label">과거 이력 (물가보정)</span><span class="sim-value">' + d.hist_avg_parking.toLocaleString() + '원/월</span></div>';
+            }}
+            html += '<div class="sim-row" style="margin-top:4px;padding-top:4px;border-top:1px solid #e8eaed;"><span class="sim-label" style="color:#0064FF;font-weight:700;">추천 범위</span><span class="sim-value" style="color:#0064FF;">' + d.parking_range_low.toLocaleString() + ' ~ ' + d.parking_range_high.toLocaleString() + '원</span></div>';
+            html += '</div>';
 
-        left += '<div class="sim-section"><div class="sim-section-title">카니발리제이션 보정</div>';
-        left += '<div class="sim-row"><span class="sim-label">반경 1km 기존 존</span><span class="sim-value">' + d.nearby_zone_count + '개 / ' + d.nearby_total_cars + '대</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">건당 이용시간</span><span class="sim-value">' + d.avg_hours_per_res + 'h <span style="font-size:9px;font-weight:400;color:#6b7394;">(' + d.hours_level + ')</span></span></div>';
-        left += '<div class="sim-row"><span class="sim-label">목표 가동률</span><span class="sim-value">' + d.target_util + '% <span style="font-size:9px;font-weight:400;color:#6b7394;">(160만원↑ ' + d.target_util_zone_count + '개존 평균)</span></span></div>';
-        left += '<div class="sim-row"><span class="sim-label">수요 기반 적정대수</span><span class="sim-value">' + d.raw_recommended_cars + '대</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">카니발 차감</span><span class="sim-value" style="color:#e74c3c">-' + d.cannibal_cars + '대</span></div>';
-        left += '</div>';
-
-        left += '<div class="sim-section"><div class="sim-section-title">최종 결과</div>';
-        left += '<div class="sim-row"><span class="sim-label">예상 주간 예약</span><span class="sim-value">' + d.est_weekly_res.toLocaleString() + '건</span></div>';
-        left += '<div style="font-size:10px;color:#6b7394;text-align:right;margin-top:-2px;">(접속기반 ' + d.base_res + ' + 부름전환 ' + d.dtod_additional + ')</div>';
-        left += '<div class="sim-row"><span class="sim-label">추천 공급대수</span><span class="sim-value" style="color:#42a5f5;font-size:15px">' + d.recommended_cars + '대</span></div>';
-        left += '<div class="sim-row"><span class="sim-label">예상 대당매출 (4주)</span><span class="sim-value" style="color:#ffb74d">' + (d.est_rev_per_car > 0 ? d.est_rev_per_car.toLocaleString() + '원' : '-') + '</span></div>';
-        left += '</div>';
-
-        if (d.is_recommend) {{
-            left += '<div class="sim-result recommend">존 개설 추천 O</div>';
-        }} else {{
-            var reasons = [];
-            if (d.recommended_cars < 1) reasons.push('추천 공급대수 부족');
-            if (d.est_rev_per_car < 1000000 && d.est_rev_per_car > 0) reasons.push('대당매출 100만원 미달');
-            if (d.est_rev_per_car === 0) reasons.push('인근 실적 데이터 없음');
-            left += '<div class="sim-result not-recommend">존 개설 추천 X</div>';
-            left += '<div style="text-align:center;font-size:10px;color:#8890a4;margin-top:6px;">' + reasons.join(' · ') + '</div>';
+            // GPM 시뮬레이션
+            if (d.gpm_scenarios && d.gpm_scenarios.length > 0) {{
+                html += '<div style="background:#f7f8fa;border-radius:10px;padding:12px 14px;margin-top:8px;">';
+                html += '<div style="font-size:10px;font-weight:700;color:#8b95a5;margin-bottom:8px;">GPM 시뮬레이션 (주차비별)</div>';
+                html += '<table style="width:100%;border-collapse:collapse;font-size:11px;">';
+                html += '<thead><tr><th style="text-align:left;padding:4px 6px;border-bottom:2px solid #e0e2e6;color:#8b95a5;font-weight:600;">주차비/월</th><th style="text-align:right;padding:4px 6px;border-bottom:2px solid #e0e2e6;color:#8b95a5;font-weight:600;">대당GP</th><th style="text-align:right;padding:4px 6px;border-bottom:2px solid #e0e2e6;color:#8b95a5;font-weight:600;">GPM</th></tr></thead><tbody>';
+                d.gpm_scenarios.forEach(function(s) {{
+                    var isMid = s.is_mid;
+                    var rowBg = isMid ? 'background:#f0f4ff;' : '';
+                    var gpColor = s.gp_per_car < 0 ? '#e53935' : '#1a1a1a';
+                    var gpmColor = s.gpm < 0 ? '#e53935' : s.gpm >= 20 ? '#18a34a' : '#1a1a1a';
+                    html += '<tr style="' + rowBg + '">';
+                    html += '<td style="padding:5px 6px;border-bottom:1px solid #f0f1f3;">' + s.parking_cost.toLocaleString() + '원' + (isMid ? ' <span style="color:#0064FF;font-size:9px;font-weight:700;">추천</span>' : '') + '</td>';
+                    html += '<td style="text-align:right;padding:5px 6px;border-bottom:1px solid #f0f1f3;color:' + gpColor + ';font-weight:600;">' + s.gp_per_car.toLocaleString() + '원</td>';
+                    html += '<td style="text-align:right;padding:5px 6px;border-bottom:1px solid #f0f1f3;color:' + gpmColor + ';font-weight:700;">' + s.gpm.toFixed(1) + '%</td>';
+                    html += '</tr>';
+                }});
+                html += '</tbody></table></div>';
+            }}
         }}
 
-        var right = '<h4>시뮬레이션 산출 기준</h4>';
+        html += '</div>';  // 좌측 끝
 
-        right += '<div class="cr-section"><div class="cr-title">1. 수요 집계</div>';
-        right += '클릭 지점 <code>반경 1km</code> 내 최근 90일 앱 접속·예약·부름 건수를 BQ에서 실시간 집계 (LIMIT 없음). 주간 평균 = 총 건수 ÷ 12.86주</div>';
+        // ── 우측: AI 평가 ──
+        html += '<div style="flex:1;min-width:0;">';
 
-        right += '<div class="cr-section"><div class="cr-title">2. 전환율</div>';
-        right += '해당 지점의 <code>region3</code> 전환율 우선 적용. 데이터 부족 시 <code>region2</code> → <code>경기도 전체</code> 순으로 fallback.<br>전환율 = 지역 예약건수 ÷ 지역 접속수</div>';
+        // ── AI 평가 (동기) ──
+        var gptLogo = '<svg width="16" height="16" viewBox="0 0 24 24" style="vertical-align:-3px;margin-right:4px;"><path fill="#1a1a1a" d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.998 5.998 0 0 0-3.992 2.9 6.049 6.049 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z"/></svg>';
+        var claudeLogo = '<svg width="16" height="16" viewBox="0 0 400 400" style="vertical-align:-3px;margin-right:4px;"><path fill="#D97757" d="m124.011 241.251 49.164-27.585.826-2.396-.826-1.333h-2.396l-8.217-.506-28.09-.759-24.363-1.012-23.603-1.266-5.938-1.265L75 197.79l.574-3.661 4.994-3.358 7.153.625 15.808 1.079 23.722 1.637 17.208 1.012 25.493 2.649h4.049l.574-1.637-1.384-1.012-1.079-1.012-24.548-16.635-26.573-17.58-13.919-10.123-7.524-5.129-3.796-4.808-1.637-10.494 6.833-7.525 9.178.624 2.345.625 9.296 7.153 19.858 15.37 25.931 19.098 3.796 3.155 1.519-1.08.185-.759-1.704-2.851-14.104-25.493-15.049-25.931-6.698-10.747-1.772-6.445c-.624-2.649-1.08-4.876-1.08-7.592l7.778-10.561L144.729 75l10.376 1.383 4.37 3.797 6.445 14.745 10.443 23.215 16.197 31.566 4.741 9.364 2.53 8.672.945 2.649h1.637v-1.519l1.332-17.782 2.464-21.832 2.395-28.091.827-7.912 3.914-9.482 7.778-5.129 6.074 2.902 4.994 7.153-.692 4.623-2.969 19.301-5.821 30.234-3.796 20.245h2.21l2.531-2.53 10.241-13.599 17.208-21.511 7.593-8.537 8.857-9.431 5.686-4.488h10.747l7.912 11.76-3.543 12.147-11.067 14.037-9.178 11.895-13.16 17.714-8.216 14.172.759 1.131 1.957-.186 29.727-6.327 16.062-2.901 19.166-3.29 8.672 4.049.944 4.116-3.408 8.419-20.498 5.062-24.042 4.808-35.801 8.469-.439.321.506.624 16.13 1.519 6.9.371h16.888l31.448 2.345 8.217 5.433 4.926 6.647-.827 5.061-12.653 6.445-17.074-4.049-39.85-9.482-13.666-3.408h-1.889v1.131l11.388 11.135 20.87 18.845 26.133 24.295 1.333 6.006-3.357 4.741-3.543-.506-22.962-17.277-8.858-7.777-20.06-16.888H238.5v1.771l4.623 6.765 24.413 36.696 1.265 11.253-1.771 3.661-6.327 2.21-6.951-1.265-14.29-20.06-14.745-22.591-11.895-20.246-1.451.827-7.018 75.601-3.29 3.863-7.592 2.902-6.327-4.808-3.357-7.778 3.357-15.37 4.049-20.06 3.29-15.943 2.969-19.807 1.772-6.58-.118-.439-1.451.186-14.931 20.498-22.709 30.689-17.968 19.234-4.302 1.704-7.458-3.864.692-6.9 4.167-6.141 24.869-31.634 14.999-19.605 9.684-11.32-.068-1.637h-.573l-66.052 42.887-11.759 1.519-5.062-4.741.625-7.778 2.395-2.531 19.858-13.665-.068.067z"/></svg>';
+        if (ev) {{
+            var parseEvalText = function(text) {{
+                if (!text) return {{ recommend: null, body: text || '평가 실패' }};
+                var lines = text.split('\\n');
+                var first = lines[0].trim();
+                var isO = first.indexOf('추천 O') >= 0 || first.indexOf('추천O') >= 0 || (first.indexOf('추천') >= 0 && first.indexOf('비추천') < 0);
+                var isX = first.indexOf('비추천') >= 0 || first.indexOf('추천 X') >= 0 || first.indexOf('추천X') >= 0;
+                if (isO && !isX) return {{ recommend: true, body: lines.slice(1).join('\\n').trim() }};
+                if (isX) return {{ recommend: false, body: lines.slice(1).join('\\n').trim() }};
+                return {{ recommend: null, body: text }};
+            }};
+            var gptP = parseEvalText(ev.gpt);
+            var claudeP = parseEvalText(ev.claude);
 
-        right += '<div class="cr-section"><div class="cr-title">3. 예상 주간 예약</div>';
-        right += '접속 기반: 반경 1km 내 실제 예약이 있으면 그 값, 없으면 <code>접속수 × 전환율</code>로 추정.<br>';
-        right += '부름 전환: 반경 내 부름 호출의 <code>50%</code>를 추가 예약 수요로 가산 (존 개설 시 일반 예약 전환 기대분).<br>';
-        right += '<b>예상 예약 = 접속 기반 + 부름 × 0.5</b></div>';
+            html += '<div style="margin-top:14px;border-top:1px solid #f0f1f3;padding-top:14px;">';
+            html += '<div style="font-size:13px;font-weight:800;color:#1a1a1a;margin-bottom:10px;">AI 종합 평가</div>';
+            html += '<div style="display:flex;flex-direction:column;gap:8px;">';
+            // GPT
+            var gBadge = gptP.recommend === true ? '<span style="background:#edfcf2;color:#18a34a;padding:3px 10px;border-radius:8px;font-size:11px;font-weight:700;">개설 추천</span>' : gptP.recommend === false ? '<span style="background:#fef2f2;color:#e53935;padding:3px 10px;border-radius:8px;font-size:11px;font-weight:700;">개설 비추천</span>' : '';
+            html += '<div style="background:#f7f8fa;border-radius:10px;padding:12px 14px;border-left:3px solid #1a1a1a;">';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><span style="font-size:11px;font-weight:700;color:#1a1a1a;">' + gptLogo + 'GPT</span>' + gBadge + '</div>';
+            html += '<div style="font-size:12px;color:#1a1a1a;line-height:1.7;white-space:pre-wrap;">' + gptP.body + '</div></div>';
+            // Claude
+            var cBadge = claudeP.recommend === true ? '<span style="background:#edfcf2;color:#18a34a;padding:3px 10px;border-radius:8px;font-size:11px;font-weight:700;">개설 추천</span>' : claudeP.recommend === false ? '<span style="background:#fef2f2;color:#e53935;padding:3px 10px;border-radius:8px;font-size:11px;font-weight:700;">개설 비추천</span>' : '';
+            html += '<div style="background:#fdf8f4;border-radius:10px;padding:12px 14px;border-left:3px solid #D97757;">';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><span style="font-size:11px;font-weight:700;color:#D97757;">' + claudeLogo + 'Claude</span>' + cBadge + '</div>';
+            html += '<div style="font-size:12px;color:#1a1a1a;line-height:1.7;white-space:pre-wrap;">' + claudeP.body + '</div></div>';
+            html += '</div></div>';
+        }}
 
-        right += '<div class="cr-section"><div class="cr-title">4. 인근 벤치마크</div>';
-        right += '<code>반경 3km</code> 내 운영 존들의 대당매출·GP·가동률을 거리 역수 가중평균으로 산출</div>';
+        html += '</div>';  // 우측 끝
+        html += '</div>';  // 전체 2컬럼 끝
 
-        right += '<div class="cr-section"><div class="cr-title">5. 수요 기반 적정대수</div>';
-        right += '<code>예상 주간 예약 × 건당 이용시간</code> ÷ <code>168h × 목표 가동률</code><br>';
-        right += '건당 이용시간 = <code>region3</code> 3개월 평균 → <code>region2</code> → 경기도 순 fallback.<br>';
-        right += '목표 가동률 = 경기도 내 대당매출 <code>160만원↑</code> 존들의 평균 가동률 (최대 70%)</div>';
+        // ── 산출 기준 (토글) ──
+        html += '<div style="margin-top:14px;border-top:1px solid #f0f1f3;padding-top:10px;">';
+        html += '<div id="simCriteriaToggle" style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:11px;color:#8b95a5;font-weight:600;">';
+        html += '<span id="simCriteriaArrow">▶</span> 산출 기준 상세</div>';
+        html += '<div id="simCriteriaBody" style="display:none;margin-top:10px;background:#f7f8fa;border-radius:10px;padding:14px 16px;font-size:11px;color:#5a6270;line-height:1.7;">';
+        html += '<b style="color:#0064FF">수요 등급</b> — ' + teamTotalLabel + ' 접속 격자 중 백분위 (S:상위5%, A:상위20%, B:상위50%, F:하위50%)<br>';
+        html += '<b style="color:#0064FF">전환율</b> — region3 우선, region2 fallback. 근 3개월 월별 전환율 중 <b>최소값</b> 적용<br>';
+        html += '<b style="color:#0064FF">예상 예약</b> — 접속수 × 전환율 + 부름 × 50%<br>';
+        html += '<b style="color:#0064FF">벤치마크</b> — 반경 3km 내 존들의 대당매출·GP·가동률 거리역수 가중평균<br>';
+        html += '<b style="color:#0064FF">적정대수</b> — 추정 월 매출(예약 × 4주 × 건당매출) ÷ 대당목표 160만원<br>';
+        html += '<b style="color:#0064FF">카니발</b> — 반경 500m 기존 존 차량 거리가중 차감<br>';
+        html += '<b style="color:#0064FF">과거 이력</b> — 반경 100m 폐존 실적 30% + 현재추정 70% 블렌딩<br>';
+        html += '<b style="color:#0064FF">주차비</b> — 인근 벤치마크 가중평균 + 과거 이력(CPI 3% 물가보정) 블렌딩<br>';
+        html += '<b style="color:#0064FF">GPM</b> — GP = 벤치마크GP - (시나리오주차비 - 벤치마크평균주차비), GPM = GP/매출×100<br>';
+        html += '<b style="color:#0064FF">AI 추천</b> — GPT+Claude 모두 추천→O, 한쪽만→보류, 모두 비추천→X';
+        html += '</div></div>';
 
-        right += '<div class="cr-section"><div class="cr-title">6. 카니발리제이션 보정</div>';
-        right += '<code>반경 1km</code> 내 기존 존 차량을 거리 가중 차감.<br>';
-        right += '카니발 차량 = Σ(존 차량수 × (1 - 거리/1km))<br>';
-        right += '가까울수록 수요 겹침이 크므로 차감 비중 높음.<br>';
-        right += '<b>추천대수 = 적정대수 - 카니발 차량</b></div>';
+        simContent.innerHTML = html;
+        document.getElementById('simCriteriaToggle').addEventListener('click', function() {{
+            var body = document.getElementById('simCriteriaBody');
+            var arrow = document.getElementById('simCriteriaArrow');
+            if (body.style.display === 'none') {{
+                body.style.display = 'block';
+                arrow.textContent = '▼';
+            }} else {{
+                body.style.display = 'none';
+                arrow.textContent = '▶';
+            }}
+        }});
 
-        right += '<div class="cr-section"><div class="cr-title">7. 과거 존 이력 반영</div>';
-        right += '반경 <code>100m</code> 내 과거 폐존(state=0)이 있으면 운영 당시 실적 조회.<br>';
-        right += '과거 실적 <code>30%</code> + 현재 추정 <code>70%</code>로 대당매출·추천대수 블렌딩.</div>';
-
-        right += '<div class="cr-section"><div class="cr-title">8. 추천 판정</div>';
-        right += '<span style="color:#27ae60;font-weight:700;">O</span> : 추천대수 ≥ 1대 AND 대당매출 ≥ 100만원<br>';
-        right += '<span style="color:#e74c3c;font-weight:700;">X</span> : 위 조건 미충족 (사유 표시)</div>';
-
-        simContent.innerHTML = '<div class="sim-body"><div class="sim-left">' + left + '</div><div class="sim-right">' + right + '</div></div>';
     }}
 }})();
+
+// ── 부름호출지역 표시 ──
+map.createPane('d2dPane');
+map.getPane('d2dPane').style.zIndex = 650;
+var d2dDestLayer = L.layerGroup([], {{ pane: 'd2dPane' }}).addTo(map);
+function d2dHideLayers() {{
+    var pane = map.getPane('overlayPane');
+    if (pane) pane.style.opacity = '0';
+    var marker = map.getPane('markerPane');
+    if (marker) marker.style.opacity = '0';
+    var shadow = map.getPane('shadowPane');
+    if (shadow) shadow.style.opacity = '0';
+    var tooltip = map.getPane('tooltipPane');
+    if (tooltip) tooltip.style.opacity = '0';
+    var popup = map.getPane('popupPane');
+    if (popup) popup.style.opacity = '0';
+}}
+function d2dRestoreLayers() {{
+    ['overlayPane','markerPane','shadowPane','tooltipPane','popupPane'].forEach(function(name) {{
+        var p = map.getPane(name);
+        if (p) p.style.opacity = '';
+    }});
+}}
+function showD2dDestinations(zoneId, zoneName) {{
+    d2dDestLayer.clearLayers();
+    map.closePopup();
+    var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('.ngrok-free.dev'));
+    var apiBase = isLocal ? '' : '{ngrok_url}';
+
+    var loadDiv = document.createElement('div');
+    loadDiv.id = 'd2dLoading';
+    loadDiv.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2001;background:#fff;border-radius:12px;padding:20px 28px;box-shadow:0 4px 20px rgba(0,0,0,0.12);text-align:center;font-size:12px;color:#5a6270;font-weight:600;';
+    loadDiv.textContent = '부름호출지역 조회 중...';
+    document.body.appendChild(loadDiv);
+
+    fetch(apiBase + '/api/d2d-destinations', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' }},
+        body: JSON.stringify({{ zone_id: zoneId, team_id: TEAM_ID }})
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+        var ld = document.getElementById('d2dLoading');
+        if (ld) ld.remove();
+        if (!data.destinations || data.destinations.length === 0) {{
+            alert('부름 호출 데이터가 없습니다.');
+            return;
+        }}
+
+        // 기존 레이어 투명 처리
+        d2dHideLayers();
+
+        // 별도 pane에 d2d 레이어 표시
+        var bounds = [];
+        data.destinations.forEach(function(d) {{
+            var r = Math.min(25, Math.max(8, d.cnt * 3));
+            var opacity = Math.min(0.85, 0.35 + d.cnt * 0.06);
+            L.circleMarker([d.lat, d.lng], {{
+                radius: r, color: '#4338ca', fillColor: '#818cf8',
+                fillOpacity: opacity, weight: 2.5, opacity: 0.9, pane: 'd2dPane'
+            }}).bindTooltip('<div style="font-weight:600;">' + d.address + '</div><div style="color:#6366f1;">' + d.cnt + '건 · ' + d.way + '</div>', {{ direction: 'top', pane: 'd2dPane' }})
+            .addTo(d2dDestLayer);
+            bounds.push([d.lat, d.lng]);
+        }});
+
+        // 존 위치 마커 + 연결선
+        var zone = zonesData.find(function(z) {{ return z.zone_id === zoneId; }});
+        if (zone) {{
+            bounds.push([zone.lat, zone.lng]);
+            L.marker([zone.lat, zone.lng], {{
+                pane: 'd2dPane',
+                icon: L.divIcon({{
+                    className: '',
+                    iconSize: [0, 0],
+                    html: '<div style="position:relative;left:-50%;bottom:30px;white-space:nowrap;"><div style="display:inline-block;background:#e53935;color:#fff;padding:5px 12px;border-radius:8px;font-size:11px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,0.2);">📍 ' + zoneName + ' (출발)</div><div style="width:2px;height:20px;background:#e53935;margin:0 auto;"></div></div>'
+                }})
+            }}).addTo(d2dDestLayer);
+            data.destinations.slice(0, 15).forEach(function(d) {{
+                L.polyline([[zone.lat, zone.lng], [d.lat, d.lng]], {{
+                    color: '#6366f1', weight: 2.5, opacity: 0.5, dashArray: '6,4', pane: 'd2dPane'
+                }}).addTo(d2dDestLayer);
+            }});
+        }}
+
+        if (bounds.length > 0) map.fitBounds(bounds, {{ padding: [40, 40] }});
+
+        // 상단 배너
+        var closeDiv = document.createElement('div');
+        closeDiv.id = 'd2dBanner';
+        closeDiv.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:#fff;border-radius:12px;padding:10px 20px;box-shadow:0 2px 12px rgba(0,0,0,0.12);display:flex;align-items:center;gap:12px;font-size:12px;';
+        closeDiv.innerHTML = '<span style="font-weight:700;color:#6366f1;">' + zoneName + '</span> 부름호출지역 <span style="color:#8b95a5;">(' + data.total + '건)</span><button id="d2dCloseBtn" style="margin-left:8px;padding:5px 14px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">닫기</button>';
+        document.body.appendChild(closeDiv);
+        document.getElementById('d2dCloseBtn').addEventListener('click', function() {{
+            d2dDestLayer.clearLayers();
+            d2dRestoreLayers();
+            var banner = document.getElementById('d2dBanner');
+            if (banner) banner.remove();
+        }});
+    }})
+    .catch(function(err) {{
+        var ld = document.getElementById('d2dLoading');
+        if (ld) ld.remove();
+        d2dRestoreLayers();
+        alert('부름호출지역 조회 실패: ' + err.message);
+    }});
+}}
 
 // (검색 기능으로 대체됨)
 </script>
@@ -2502,333 +3729,447 @@ function showTimeline(zoneId, zoneName) {{
     return html
 
 
-def regenerate_from_cache():
+def regenerate_from_cache(team_id='gyeonggi'):
     """캐시 데이터로 HTML만 재생성 (BQ 조회 없음, 서울 필터 적용)"""
-    cache_dir = os.path.join(OUTPUT_DIR, ".cache")
-    print(f"[{datetime.now()}] 캐시에서 HTML 재생성")
+    cache_dir = _team_cache_dir(team_id)
+    team_name = TEAM_CONFIG[team_id]['name']
+    print(f"[{datetime.now()}] 캐시에서 HTML 재생성 ({team_name})")
 
-    def load_cache(name):
-        path = os.path.join(cache_dir, f"{name}.json")
-        with open(path) as f:
-            return json.load(f)
-
-    access = load_cache("access")
-    reservation = load_cache("reservation")
-    zones = load_cache("zones")
-    gaps = load_cache("gaps")
-    analysis = load_cache("supply_demand")
-    dtod_path = os.path.join(cache_dir, "dtod.json")
-    dtod = json.load(open(dtod_path)) if os.path.exists(dtod_path) else []
+    access = _load_cache("access", team_id) or []
+    reservation = _load_cache("reservation", team_id) or []
+    zones = _load_cache("zones", team_id) or []
+    gaps = _load_cache("gaps", team_id) or []
+    analysis = _load_cache("supply_demand", team_id) or {}
+    dtod = _load_cache("dtod", team_id) or []
 
     # 서울+인천 데이터 제거 (히트맵: 접경 허용 / 분석: 철저 제외)
     zone_coords = [(float(z['lat']), float(z['lng'])) for z in zones]
     before_a, before_r, before_d = len(access), len(reservation), len(dtod)
-    access = filter_non_gyeonggi(access, zone_coords=zone_coords, keep_dist_km=1.0)
-    reservation = filter_non_gyeonggi(reservation, zone_coords=zone_coords, keep_dist_km=1.0)
-    dtod = filter_non_gyeonggi(dtod, zone_coords=zone_coords, keep_dist_km=1.0)
-    print(f"  서울+인천 필터: 접속 {before_a}->{len(access)}, 예약 {before_r}->{len(reservation)}, 부름 {before_d}->{len(dtod)}")
+    access = filter_non_gyeonggi(access, zone_coords=zone_coords, keep_dist_km=1.0, team_id=team_id)
+    reservation = filter_non_gyeonggi(reservation, zone_coords=zone_coords, keep_dist_km=1.0, team_id=team_id)
+    dtod = filter_non_gyeonggi(dtod, zone_coords=zone_coords, keep_dist_km=1.0, team_id=team_id)
+    print(f"  지역 필터: 접속 {before_a}->{len(access)}, 예약 {before_r}->{len(reservation)}, 부름 {before_d}->{len(dtod)}")
 
     # 공급 분석: 캐시에서 주간 추이 로드
-    weekly_path = os.path.join(cache_dir, "weekly_trends.json")
-    if os.path.exists(weekly_path):
-        weekly_data = json.load(open(weekly_path))
-        analysis = compute_growth_analysis(weekly_data, zones)
+    weekly_data = _load_cache("weekly_trends", team_id)
+    if weekly_data:
+        analysis = compute_growth_analysis(weekly_data, zones, team_name=team_name)
     else:
-        analysis = load_cache("supply_demand") or {}  # fallback
+        analysis = _load_cache("supply_demand", team_id) or {}  # fallback
     if isinstance(analysis, dict):
         print(f"  공급 분석: {len(analysis.get('growth',[]))} 성장 / {len(analysis.get('decline',[]))} 감소 지역")
     else:
         print(f"  공급 분석: {len(analysis)} 지역 (레거시)")
 
-    # Gap 분석: 서울+인천 철저 제외 (compute_gaps 내부에서 is_non_gyeonggi 적용)
-    gaps = compute_gaps(access, reservation, zones)
+    # Gap 분석
+    gaps = compute_gaps(access, reservation, zones, team_id=team_id)
     print(f"  Gap 재계산: {len(gaps)} 지역 (역지오코딩 중...)")
-    gaps = reverse_geocode(gaps)
+    gaps = reverse_geocode(gaps, team_id=team_id, zones_data=zones)
     print(f"  Gap 역지오코딩 완료: {len(gaps)} 지역")
 
     # 실적 데이터 로드
-    profit_path = os.path.join(cache_dir, "profit.json")
-    profit_data = json.load(open(profit_path)) if os.path.exists(profit_path) else {}
-    # profit 캐시의 키가 문자열이므로 int로 변환
+    profit_data = _load_cache("profit", team_id) or {}
     profit_data = {int(k): v for k, v in profit_data.items()} if profit_data else {}
 
     # 그린카 데이터 로드
-    gcar_path = os.path.join(cache_dir, "gcar.json")
-    gcar_data = json.load(open(gcar_path)) if os.path.exists(gcar_path) else []
+    gcar_data = _load_cache("gcar", team_id) or []
+
+    # 폐쇄 존 데이터 로드
+    closed_data = _load_cache("closed", team_id) or []
 
     # 쏘카 지역별 실 운영 차량 로드
-    socar_supply_path = os.path.join(cache_dir, "socar_supply.json")
-    socar_supply = json.load(open(socar_supply_path)) if os.path.exists(socar_supply_path) else {}
+    socar_supply = _load_cache("socar_supply", team_id) or {}
 
     # 예약 타임라인 로드
-    timeline_path = os.path.join(cache_dir, "timeline.json")
-    timeline_data = json.load(open(timeline_path)) if os.path.exists(timeline_path) else {}
+    timeline_data = _load_cache("timeline", team_id) or {}
+
+    # 주차 계약 로드
+    parking_contract = _load_cache("parking_contract", team_id) or {}
+
+    # 히트맵: 행정구역 polygon 필터 + 동적 격자 수 제한
+    access = filter_by_polygon(access, team_id)
+    reservation = filter_by_polygon(reservation, team_id)
+    dtod = filter_by_polygon(dtod, team_id)
+
+    grid_limit = _calc_grid_limit(len(zones))
+    access = sorted(access, key=lambda x: -int(x['access_count']))[:grid_limit]
+    reservation = sorted(reservation, key=lambda x: -int(x['reservation_count']))[:grid_limit]
+    dtod = sorted(dtod, key=lambda x: -int(x['call_count']))[:grid_limit]
 
     html = generate_index(access, reservation, zones, gaps, analysis, dtod, profit_data,
-                          gcar_data=gcar_data, socar_supply=socar_supply, timeline_data=timeline_data)
-    path = os.path.join(OUTPUT_DIR, "index.html")
+                          gcar_data=gcar_data, socar_supply=socar_supply, parking_contract=parking_contract,
+                          timeline_data=timeline_data, closed_data=closed_data, team_id=team_id)
+    out_dir = _team_output_dir(team_id)
+    path = os.path.join(out_dir, "index.html")
     with open(path, "w") as f:
         f.write(html)
     print(f"  -> {path} ({len(html):,} bytes)")
     print("[완료] HTML 재생성 완료")
 
 
-def main():
-    print(f"[{datetime.now()}] 경기도 잠재 수요 지도 업데이트 시작")
+def main(team_id='gyeonggi'):
+    team_name = TEAM_CONFIG[team_id]['name']
+    print(f"[{datetime.now()}] {team_name} 잠재 수요 지도 업데이트 시작")
     print(f"  기간: {THREE_MONTHS_AGO} ~ {TODAY}")
 
-    cache_dir = os.path.join(OUTPUT_DIR, ".cache")
-    os.makedirs(cache_dir, exist_ok=True)
+    cache_dir = _team_cache_dir(team_id)
 
     print("  1/6 앱 접속 데이터 조회...")
-    access = query_access()
+    access = query_access(team_id=team_id)
     print(f"       {len(access)} rows, {sum(int(r['access_count']) for r in access):,} 건")
 
     print("  2/6 예약 생성 데이터 조회...")
-    reservation = query_reservation()
+    reservation = query_reservation(team_id=team_id)
     print(f"       {len(reservation)} rows, {sum(int(r['reservation_count']) for r in reservation):,} 건")
 
     print("  3/6 운영 존 + 차량 대수 조회...")
-    zones = query_zones()
+    zones = query_zones(team_id=team_id)
     print(f"       {len(zones)} 존, {sum(int(z.get('car_count',0)) for z in zones):,} 대")
 
     print("  4/6 지역별 실 예약 건수 조회 (존 소속 차량 기준)...")
-    zone_reservations = query_reservation_by_zone_region()
+    zone_reservations = query_reservation_by_zone_region(team_id=team_id)
     print(f"       {len(zone_reservations)} 지역")
 
     print("  5/6 부름 호출 위치 조회...")
-    dtod = query_dtod()
+    dtod = query_dtod(team_id=team_id)
     print(f"       {len(dtod)} rows, {sum(r['call_count'] for r in dtod):,} 건")
 
     print("  5.1/6 존별 실적 조회 (profit_socar_car_daily)...")
-    profit_data = query_zone_profit()
+    profit_data = query_zone_profit(team_id=team_id)
     print(f"       {len(profit_data)} 존 실적")
 
     print("  5.2/6 그린카 존 현황 조회 (gcar_info_log)...")
-    gcar_data = query_gcar_zones()
+    gcar_data = query_gcar_zones(team_id=team_id)
     print(f"       {len(gcar_data)} 존, {sum(int(g.get('total_cars',0)) for g in gcar_data):,} 대")
 
+    print("  5.2b/6 폐쇄 존 현황 조회...")
+    closed_data = query_closed_zones(team_id=team_id)
+    print(f"       {len(closed_data)} 존")
+
     print("  5.3/6 쏘카 지역별 실 운영 차량/존 수 (profit_car_daily)...")
-    socar_supply = query_socar_supply_by_region()
+    socar_supply = query_socar_supply_by_region(team_id=team_id)
     print(f"       {len(socar_supply)} 지역, {sum(v['socar_cars'] for v in socar_supply.values()):,} 대")
 
     zone_coords = [(float(z['lat']), float(z['lng'])) for z in zones]
 
     # 공급 분석: 주간 추이 기반 성장 지역 분석
     print("  5.5/6 주간 추이 조회 (접속/예약/공급)...")
-    weekly_data = query_weekly_trends()
+    weekly_data = query_weekly_trends(team_id=team_id)
     access_cnt = len(weekly_data.get('access', []))
     res_cnt = len(weekly_data.get('res', []))
     supply_cnt = len(weekly_data.get('supply', []))
     print(f"       접속 {access_cnt}, 예약 {res_cnt}, 공급 {supply_cnt} rows")
-    analysis = compute_growth_analysis(weekly_data, zones)
+    analysis = compute_growth_analysis(weekly_data, zones, team_name=team_name)
     print(f"       공급 분석: {len(analysis.get('growth',[]))} 성장 / {len(analysis.get('decline',[]))} 감소 지역")
 
-    # Gap 분석: compute_gaps 내부에서 is_non_gyeonggi 적용
+    # Gap 분석
     print("  6/6 미충족 수요 분석 + 역지오코딩...")
-    gaps = compute_gaps(access, reservation, zones)
-    gaps_named = reverse_geocode(gaps)
+    gaps = compute_gaps(access, reservation, zones, team_id=team_id)
+    gaps_named = reverse_geocode(gaps, team_id=team_id, zones_data=zones)
     print(f"       {len(gaps_named)} 미충족 지역")
 
-    # 히트맵 데이터 필터링: 경기도 존 3km 이내 + 서울/인천 제외 (접경 허용)
-    def _near_zone(lat, lng, max_km=3.0):
-        return any(haversine_km(lat, lng, zl, zn) <= max_km
-                   for zl, zn in zone_coords
-                   if abs(lat - zl) < 0.05 and abs(lng - zn) < 0.05
-                   ) or min(haversine_km(lat, lng, zl, zn) for zl, zn in zone_coords) <= max_km
+    # 원본 데이터 보관 (캐시 저장용)
+    access_raw, reservation_raw, dtod_raw = access[:], reservation[:], dtod[:]
 
+    # 히트맵: 행정구역 polygon 필터 + 동적 격자 수 제한
     access_before = len(access)
-    access = [r for r in access if _near_zone(float(r['lat']), float(r['lng']))]
-    access = filter_non_gyeonggi(access, zone_coords=zone_coords, keep_dist_km=1.0)
-    access.sort(key=lambda x: -x['access_count'])
-    access = access[:1000]
-    print(f"       히트맵 필터: {access_before} -> {len(access)} (경기도 존 3km 이내, 서울+인천 접경허용, top 1000)")
+    access = filter_by_polygon(access, team_id)
+    reservation = filter_by_polygon(reservation, team_id)
+    dtod = filter_by_polygon(dtod, team_id)
 
-    res_before = len(reservation)
-    reservation = [r for r in reservation if _near_zone(float(r['lat']), float(r['lng']))]
-    reservation = filter_non_gyeonggi(reservation, zone_coords=zone_coords, keep_dist_km=1.0)
-    reservation.sort(key=lambda x: -x['reservation_count'])
-    reservation = reservation[:1000]
-    print(f"       예약 필터: {res_before} -> {len(reservation)}")
-
-    # 부름 호출 데이터 필터링
-    dtod_before = len(dtod)
-    dtod = [r for r in dtod if _near_zone(r['lat'], r['lng'])]
-    dtod = filter_non_gyeonggi(dtod, zone_coords=zone_coords, keep_dist_km=1.0)
-    dtod.sort(key=lambda x: -x['call_count'])
-    dtod = dtod[:1000]
-    print(f"       부름 필터: {dtod_before} -> {len(dtod)}")
+    grid_limit = _calc_grid_limit(len(zones))
+    access.sort(key=lambda x: -int(x['access_count']))
+    access = access[:grid_limit]
+    reservation.sort(key=lambda x: -int(x['reservation_count']))
+    reservation = reservation[:grid_limit]
+    dtod.sort(key=lambda x: -int(x['call_count']))
+    dtod = dtod[:grid_limit]
+    print(f"       polygon 필터: {access_before} -> {len(access)} (top {grid_limit})")
 
     print("  7/7 예약 타임라인 조회...")
-    timeline_data = query_reservation_timeline()
+    timeline_data = query_reservation_timeline(team_id=team_id)
     total_res = sum(len(v) for v in timeline_data.values())
     print(f"       {len(timeline_data)} 존, {total_res:,} 건")
 
-    # Save cache
-    for name, data in [("access", access), ("reservation", reservation),
+    # Save cache (원본 데이터 저장)
+    for name, data in [("access", access_raw), ("reservation", reservation_raw),
                        ("zones", zones), ("gaps", gaps_named),
                        ("supply_demand", analysis), ("weekly_trends", weekly_data),
-                       ("dtod", dtod),
+                       ("dtod", dtod_raw),
                        ("profit", profit_data), ("gcar", gcar_data),
+                       ("closed", closed_data),
                        ("socar_supply", socar_supply), ("timeline", timeline_data)]:
-        with open(os.path.join(cache_dir, f"{name}.json"), "w") as f:
-            json.dump(data, f, ensure_ascii=False)
+        _save_cache(name, data, team_id=team_id)
 
     print("  HTML 생성...")
     html1 = generate_index(access, reservation, zones, gaps_named, analysis, dtod, profit_data,
-                           gcar_data=gcar_data, socar_supply=socar_supply, timeline_data=timeline_data)
-    path1 = os.path.join(OUTPUT_DIR, "index.html")
+                           gcar_data=gcar_data, socar_supply=socar_supply, timeline_data=timeline_data, closed_data=closed_data,
+                           team_id=team_id)
+    out_dir = _team_output_dir(team_id)
+    path1 = os.path.join(out_dir, "index.html")
     with open(path1, "w") as f:
         f.write(html1)
     print(f"  -> {path1} ({len(html1):,} bytes)")
     print(f"[완료] 대시보드가 생성되었습니다.")
 
 
-def _load_cache(name):
-    path = os.path.join(OUTPUT_DIR, ".cache", f"{name}.json")
+def _load_cache(name, team_id='gyeonggi'):
+    path = os.path.join(_team_cache_dir(team_id), f"{name}.json")
     if os.path.exists(path):
         with open(path) as f:
+            return json.load(f)
+    # fallback: 기존 경로 (마이그레이션 호환)
+    old_path = os.path.join(OUTPUT_DIR, ".cache", f"{name}.json")
+    if team_id == 'gyeonggi' and os.path.exists(old_path):
+        with open(old_path) as f:
             return json.load(f)
     return None
 
 
-def _save_cache(name, data):
-    cache_dir = os.path.join(OUTPUT_DIR, ".cache")
-    os.makedirs(cache_dir, exist_ok=True)
+def _save_cache(name, data, team_id='gyeonggi'):
+    cache_dir = _team_cache_dir(team_id)
     with open(os.path.join(cache_dir, f"{name}.json"), "w") as f:
         json.dump(data, f, ensure_ascii=False)
 
 
-def _build_html():
+def _build_html(team_id='gyeonggi'):
     """캐시에서 모든 데이터 로드 → HTML 생성"""
-    access = _load_cache("access") or []
-    reservation = _load_cache("reservation") or []
-    zones = _load_cache("zones") or []
-    gaps = _load_cache("gaps") or []
-    analysis = _load_cache("supply_demand") or []
-    dtod = _load_cache("dtod") or []
-    profit_data = _load_cache("profit") or {}
+    access = _load_cache("access", team_id) or []
+    reservation = _load_cache("reservation", team_id) or []
+    zones = _load_cache("zones", team_id) or []
+    gaps = _load_cache("gaps", team_id) or []
+    analysis = _load_cache("supply_demand", team_id) or []
+    dtod = _load_cache("dtod", team_id) or []
+    profit_data = _load_cache("profit", team_id) or {}
     if profit_data:
         profit_data = {int(k): v for k, v in profit_data.items()}
-    gcar_data = _load_cache("gcar") or []
-    socar_supply = _load_cache("socar_supply") or {}
-    parking_contract = _load_cache("parking_contract") or {}
+    gcar_data = _load_cache("gcar", team_id) or []
+    closed_data = _load_cache("closed", team_id) or []
+    socar_supply = _load_cache("socar_supply", team_id) or {}
+    parking_contract = _load_cache("parking_contract", team_id) or {}
     if parking_contract:
         parking_contract = {int(k): v for k, v in parking_contract.items()}
-    timeline_data = _load_cache("timeline") or {}
+    timeline_data = _load_cache("timeline", team_id) or {}
+
+    # 히트맵: 행정구역 polygon 필터 + 동적 격자 수 제한
+    access = filter_by_polygon(access, team_id)
+    reservation = filter_by_polygon(reservation, team_id)
+    dtod = filter_by_polygon(dtod, team_id)
+    grid_limit = _calc_grid_limit(len(zones))
+    access = sorted(access, key=lambda x: -int(x['access_count']))[:grid_limit]
+    reservation = sorted(reservation, key=lambda x: -int(x['reservation_count']))[:grid_limit]
+    dtod = sorted(dtod, key=lambda x: -int(x['call_count']))[:grid_limit]
 
     html = generate_index(access, reservation, zones, gaps, analysis, dtod, profit_data,
                           gcar_data=gcar_data, socar_supply=socar_supply,
-                          parking_contract=parking_contract, timeline_data=timeline_data)
-    path = os.path.join(OUTPUT_DIR, "index.html")
+                          parking_contract=parking_contract, timeline_data=timeline_data, closed_data=closed_data,
+                          team_id=team_id)
+    out_dir = _team_output_dir(team_id)
+    path = os.path.join(out_dir, "index.html")
     with open(path, "w") as f:
         f.write(html)
     print(f"  -> {path} ({len(html):,} bytes)")
 
 
-def update_demand():
+def update_demand(team_id='gyeonggi'):
     """수요 데이터만 업데이트 (앱 접속, 예약 생성, 부름 호출)"""
-    print(f"[{datetime.now()}] 수요 데이터 업데이트")
+    team_name = TEAM_CONFIG[team_id]['name']
+    print(f"[{datetime.now()}] 수요 데이터 업데이트 ({team_name})")
     print(f"  기간: {THREE_MONTHS_AGO} ~ {TODAY}")
 
     print("  1/3 앱 접속 데이터 조회...")
-    access = query_access()
+    access = query_access(team_id=team_id)
     print(f"       {len(access)} rows")
 
     print("  2/3 예약 생성 데이터 조회...")
-    reservation = query_reservation()
+    reservation = query_reservation(team_id=team_id)
     print(f"       {len(reservation)} rows")
 
     print("  3/3 부름 호출 위치 조회...")
-    dtod = query_dtod()
+    dtod = query_dtod(team_id=team_id)
     print(f"       {len(dtod)} rows")
 
     # 존 데이터 로드 (캐시)
-    zones = _load_cache("zones") or []
+    zones = _load_cache("zones", team_id) or []
     zone_coords = [(float(z['lat']), float(z['lng'])) for z in zones]
 
     # 공급 분석: 주간 추이 기반
     print("  3.5/3 주간 추이 조회...")
-    weekly_data = query_weekly_trends()
-    analysis = compute_growth_analysis(weekly_data, zones)
+    weekly_data = query_weekly_trends(team_id=team_id)
+    analysis = compute_growth_analysis(weekly_data, zones, team_name=team_name)
     print(f"       {len(analysis.get('growth',[]))} 성장 / {len(analysis.get('decline',[]))} 감소 지역")
 
     # Gap 분석
-    gaps = compute_gaps(access, reservation, zones)
-    gaps = reverse_geocode(gaps)
+    gaps = compute_gaps(access, reservation, zones, team_id=team_id)
+    gaps = reverse_geocode(gaps, team_id=team_id, zones_data=zones)
 
-    # 히트맵 필터링
-    def _near_zone(lat, lng, max_km=3.0):
-        return any(haversine_km(lat, lng, zl, zn) <= max_km
-                   for zl, zn in zone_coords
-                   if abs(lat - zl) < 0.05 and abs(lng - zn) < 0.05
-                   ) or (zone_coords and min(haversine_km(lat, lng, zl, zn) for zl, zn in zone_coords) <= max_km)
-
-    if zone_coords:
-        access = [r for r in access if _near_zone(float(r['lat']), float(r['lng']))]
-        access = filter_non_gyeonggi(access, zone_coords=zone_coords, keep_dist_km=1.0)
-        access.sort(key=lambda x: -x['access_count'])
-        access = access[:1000]
-        reservation = [r for r in reservation if _near_zone(float(r['lat']), float(r['lng']))]
-        reservation = filter_non_gyeonggi(reservation, zone_coords=zone_coords, keep_dist_km=1.0)
-        reservation.sort(key=lambda x: -x['reservation_count'])
-        reservation = reservation[:1000]
-        dtod = [r for r in dtod if _near_zone(r['lat'], r['lng'])]
-        dtod = filter_non_gyeonggi(dtod, zone_coords=zone_coords, keep_dist_km=1.0)
-        dtod.sort(key=lambda x: -x['call_count'])
-        dtod = dtod[:1000]
-
+    # 캐시에 원본 저장 (히트맵 필터 전)
     for name, data in [("access", access), ("reservation", reservation), ("dtod", dtod),
                        ("supply_demand", analysis), ("weekly_trends", weekly_data), ("gaps", gaps)]:
-        _save_cache(name, data)
+        _save_cache(name, data, team_id=team_id)
 
-    _build_html()
+    _build_html(team_id=team_id)
     print("[완료] 수요 데이터 업데이트 완료")
 
 
-def update_zone():
+def update_zone(team_id='gyeonggi'):
     """존/실적 데이터만 업데이트 (존 정보, 실적, 그린카, 예약 타임라인)"""
-    print(f"[{datetime.now()}] 존/실적 데이터 업데이트")
+    team_name = TEAM_CONFIG[team_id]['name']
+    print(f"[{datetime.now()}] 존/실적 데이터 업데이트 ({team_name})")
 
     print("  1/6 운영 존 + 차량 대수 조회...")
-    zones = query_zones()
+    zones = query_zones(team_id=team_id)
     print(f"       {len(zones)} 존, {sum(int(z.get('car_count',0)) for z in zones):,} 대")
 
     print("  2/6 존별 실적 조회...")
-    profit_data = query_zone_profit()
+    profit_data = query_zone_profit(team_id=team_id)
     print(f"       {len(profit_data)} 존 실적")
 
     print("  3/6 주차 계약 정보 조회...")
-    parking_contract = query_parking_contract()
+    parking_contract = query_parking_contract(team_id=team_id)
     print(f"       {len(parking_contract)} 존 계약")
 
     print("  4/6 그린카 존 현황 조회...")
-    gcar_data = query_gcar_zones()
+    gcar_data = query_gcar_zones(team_id=team_id)
     print(f"       {len(gcar_data)} 존")
 
+    print("  4b/6 폐쇄 존 현황 조회...")
+    closed_data = query_closed_zones(team_id=team_id)
+    print(f"       {len(closed_data)} 존")
+
     print("  5/6 쏘카 지역별 실 운영 차량/존 수...")
-    socar_supply = query_socar_supply_by_region()
+    socar_supply = query_socar_supply_by_region(team_id=team_id)
     print(f"       {len(socar_supply)} 지역")
 
     print("  6/6 예약 타임라인 조회...")
-    timeline_data = query_reservation_timeline()
+    timeline_data = query_reservation_timeline(team_id=team_id)
     print(f"       {len(timeline_data)} 존, {sum(len(v) for v in timeline_data.values()):,} 건")
 
     for name, data in [("zones", zones), ("profit", profit_data), ("parking_contract", parking_contract),
-                       ("gcar", gcar_data), ("socar_supply", socar_supply), ("timeline", timeline_data)]:
-        _save_cache(name, data)
+                       ("gcar", gcar_data), ("closed", closed_data), ("socar_supply", socar_supply), ("timeline", timeline_data)]:
+        _save_cache(name, data, team_id=team_id)
 
-    _build_html()
+    _build_html(team_id=team_id)
     print("[완료] 존/실적 업데이트 완료")
+
+
+def generate_landing_page():
+    """팀 선택 랜딩 페이지 생성"""
+    team_icons = {
+        'seoul': '🏙️', 'gyeonggi': '🏔️', 'chungcheong': '🌾',
+        'gyeongbuk': '🏛️', 'gyeongnam': '🌊', 'honam': '🌿',
+    }
+    cards = ''
+    for tid, cfg in TEAM_CONFIG.items():
+        regions_str = ', '.join(cfg['regions'])
+        icon = team_icons.get(tid, '📍')
+        cards += f'''
+        <a href="/{tid}/" class="team-card">
+            <div class="team-icon">{icon}</div>
+            <div class="team-info">
+                <div class="team-name">{cfg['name']}</div>
+                <div class="team-regions">{regions_str}</div>
+            </div>
+            <div class="team-arrow">→</div>
+        </a>'''
+
+    html = f'''<!DOCTYPE html>
+<html lang="ko"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>쏘카 수요/인프라 지도</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ font-family:'Pretendard',-apple-system,sans-serif; background:#fff; min-height:100vh; }}
+.hero {{
+    background: linear-gradient(135deg, #0064FF 0%, #0046b8 100%);
+    padding: 60px 20px 48px;
+    text-align: center;
+    color: #fff;
+}}
+.hero-logo {{
+    width: 48px; height: 48px; object-fit: contain;
+    filter: brightness(10);
+    margin-bottom: 16px;
+}}
+.hero h1 {{ font-size: 28px; font-weight: 900; margin-bottom: 8px; letter-spacing: -0.5px; }}
+.hero p {{ font-size: 14px; opacity: 0.7; font-weight: 500; }}
+.container {{
+    max-width: 760px; margin: -28px auto 0; padding: 0 20px 40px;
+    position: relative; z-index: 1;
+}}
+.team-card {{
+    display: flex; align-items: center; gap: 16px;
+    background: #fff; border-radius: 16px; padding: 20px 24px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    text-decoration: none; color: inherit;
+    transition: all 0.2s; border: 1px solid #f0f1f3;
+    margin-bottom: 10px;
+}}
+.team-card:hover {{
+    border-color: #0064FF; box-shadow: 0 4px 20px rgba(0,100,255,0.12);
+    transform: translateY(-2px);
+}}
+.team-icon {{
+    width: 48px; height: 48px; border-radius: 14px;
+    background: #f4f5f7; display: flex; align-items: center; justify-content: center;
+    font-size: 24px; flex-shrink: 0;
+}}
+.team-card:hover .team-icon {{ background: #f0f4ff; }}
+.team-info {{ flex: 1; }}
+.team-name {{ font-size: 16px; font-weight: 800; color: #1a1a1a; margin-bottom: 4px; }}
+.team-regions {{ font-size: 12px; color: #8b95a5; font-weight: 500; }}
+.team-arrow {{ font-size: 18px; color: #d0d5dd; font-weight: 300; transition: all 0.2s; }}
+.team-card:hover .team-arrow {{ color: #0064FF; transform: translateX(4px); }}
+.footer {{ text-align: center; padding: 20px; font-size: 11px; color: #b0b8c4; }}
+</style></head><body>
+<div class="hero">
+    <svg style="height:48px;margin-bottom:16px;" viewBox="0 0 120 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <text x="0" y="26" font-family="Pretendard,-apple-system,sans-serif" font-size="28" font-weight="900" fill="#FFFFFF" letter-spacing="-1">SOCAR</text>
+    </svg>
+    <h1>수요/인프라 지도</h1>
+    <p>팀(지역)을 선택하세요</p>
+</div>
+<div class="container">
+    {cards}
+</div>
+<div class="footer">업데이트: {TODAY}</div>
+</body></html>'''
+
+    path = os.path.join(OUTPUT_DIR, "index.html")
+    with open(path, "w") as f:
+        f.write(html)
+    print(f"  -> 랜딩 페이지: {path}")
 
 
 if __name__ == "__main__":
     import sys
+    # --team 인자 파싱
+    team_id = None
+    for i, arg in enumerate(sys.argv):
+        if arg == '--team' and i + 1 < len(sys.argv):
+            team_id = sys.argv[i + 1]
+            break
+
+    teams = list(TEAM_CONFIG.keys()) if team_id == 'all' or team_id is None else [team_id]
+
     if '--regen' in sys.argv:
-        regenerate_from_cache()
+        for t in teams:
+            print(f"\n{'='*40} {TEAM_CONFIG[t]['name']} {'='*40}")
+            regenerate_from_cache(team_id=t)
+        generate_landing_page()
     elif '--demand' in sys.argv:
-        update_demand()
+        for t in teams:
+            print(f"\n{'='*40} {TEAM_CONFIG[t]['name']} {'='*40}")
+            update_demand(team_id=t)
+        generate_landing_page()
     elif '--zone' in sys.argv:
-        update_zone()
+        for t in teams:
+            print(f"\n{'='*40} {TEAM_CONFIG[t]['name']} {'='*40}")
+            update_zone(team_id=t)
+        generate_landing_page()
     else:
-        main()
+        for t in teams:
+            print(f"\n{'='*40} {TEAM_CONFIG[t]['name']} {'='*40}")
+            main(team_id=t)
+        generate_landing_page()
