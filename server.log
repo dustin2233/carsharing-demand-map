@@ -63,3 +63,5 @@ BrokenPipeError: [Errno 32] Broken pipe
 127.0.0.1 - - [14/Apr/2026 16:18:23] "GET /api/status HTTP/1.1" 200 -
 127.0.0.1 - - [14/Apr/2026 16:25:24] "GET /api/status HTTP/1.1" 200 -
 127.0.0.1 - - [14/Apr/2026 16:29:08] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [14/Apr/2026 16:31:27] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [14/Apr/2026 16:37:32] "POST /api/d2d-destinations HTTP/1.1" 200 -

@@ -1410,7 +1410,14 @@ def compute_reentry_zones(closed_data, access_data, reservation_data, zones_data
     RADIUS_KM = 1.0
     num_months = 3
     results = []
+    # 부적합 존 이름 제외
+    EXCLUDE_NAMES = ['공영주차장', '꼬끼오', '마트', '매각', '비즈니스', '시승', '장착', '캐리어', '캠핑카', '경매', '플랜']
+
     for z in closed_data:
+        # 조건 0: 부적합 존 이름 제외
+        zname = z.get('zone_name', '')
+        if any(kw in zname for kw in EXCLUDE_NAMES):
+            continue
         # 조건 1: 평균 운영대수 >= 1
         if float(z.get('hist_car_count', 0)) < 1:
             continue
@@ -2422,7 +2429,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 
 <div class="gap-panel" id="reentryPanel" style="width:400px;">
     <h3>재진입 추천구역</h3>
-    <div style="font-size:11px;color:#8b95a5;margin-bottom:8px;font-weight:500;">폐쇄존 중 운영대수 &ge;1, 운영 1개월+, 주변 수요 존재</div>
+    <div style="font-size:11px;color:#8b95a5;margin-bottom:8px;font-weight:500;line-height:1.6;">폐쇄존 중 아래 조건 모두 충족:<br>&middot; 과거 평균 운영대수 1대 이상<br>&middot; 운영 기간 30일 이상<br>&middot; 대당 매출 160만원/28일 이상<br>&middot; 반경 1km 내 월 접속 100건 이상<br>&middot; 반경 300m 내 현재 운영존 없음</div>
     <div id="reentryRegionFilter" style="margin-bottom:10px;display:flex;align-items:center;gap:6px;{'display:none;' if len(TEAM_CONFIG[team_id]['regions']) <= 1 else ''}">
         <span style="font-size:11px;color:#8b95a5;font-weight:600;">지역</span>
         <select id="reentryRegionSelect" style="padding:6px 12px;border-radius:8px;border:1px solid #e8eaed;background:#fff;color:#1a1a1a;font-size:12px;font-weight:600;">
