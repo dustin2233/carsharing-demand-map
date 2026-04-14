@@ -4020,6 +4020,12 @@ def regenerate_from_cache(team_id='gyeonggi'):
     with open(path, "w") as f:
         f.write(html)
     print(f"  -> {path} ({len(html):,} bytes)")
+    # 단일 팀이면 root index.html에도 복사
+    root_index = os.path.join(OUTPUT_DIR, "index.html")
+    if path != root_index:
+        import shutil
+        shutil.copy2(path, root_index)
+        print(f"  -> {root_index} (복사)")
     print("[완료] HTML 재생성 완료")
 
 
@@ -4373,19 +4379,19 @@ if __name__ == "__main__":
         for t in teams:
             print(f"\n{'='*40} {TEAM_CONFIG[t]['name']} {'='*40}")
             regenerate_from_cache(team_id=t)
-        generate_landing_page()
     elif '--demand' in sys.argv:
         for t in teams:
             print(f"\n{'='*40} {TEAM_CONFIG[t]['name']} {'='*40}")
             update_demand(team_id=t)
-        generate_landing_page()
     elif '--zone' in sys.argv:
         for t in teams:
             print(f"\n{'='*40} {TEAM_CONFIG[t]['name']} {'='*40}")
             update_zone(team_id=t)
-        generate_landing_page()
     else:
         for t in teams:
             print(f"\n{'='*40} {TEAM_CONFIG[t]['name']} {'='*40}")
             main(team_id=t)
+
+    # 멀티팀(전체) 모드일 때만 랜딩 페이지 생성
+    if len(teams) > 1:
         generate_landing_page()
