@@ -278,8 +278,10 @@ def query_dtod(team_id='gyeonggi'):
     SELECT ROUND(d.start_lat, 4) AS lat, ROUND(d.start_lng, 4) AS lng,
            COUNT(*) AS call_count
     FROM `socar-data.tianjin_replica.reservation_dtod_info` d
+    JOIN `socar-data.soda_store.reservation_v2` r ON r.reservation_id = d.reservation_id
     WHERE d.created_at >= TIMESTAMP('{THREE_MONTHS_AGO}', 'Asia/Seoul')
       AND d.created_at < TIMESTAMP('{NEXT_DAY}', 'Asia/Seoul')
+      AND r.state = 3
       AND d.start_lat BETWEEN {bb['lat'][0]} AND {bb['lat'][1]}
       AND d.start_lng BETWEEN {bb['lng'][0]} AND {bb['lng'][1]}
       AND d.start_lat IS NOT NULL AND d.start_lng IS NOT NULL
