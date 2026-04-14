@@ -1417,6 +1417,9 @@ def compute_reentry_zones(closed_data, access_data, reservation_data, zones_data
         # 조건 2: 운영 30일 이상
         if int(z.get('operation_days', 0)) < 30:
             continue
+        # 조건 2.5: 대당 매출 160만원 이상 (28일 기준)
+        if float(z.get('revenue_per_car_28d', 0)) < 1600000:
+            continue
         # 조건 3: 300m 내 운영 존 없음
         zlat, zlng = float(z['lat']), float(z['lng'])
         if active_zone_coords and any(haversine_km(zlat, zlng, al, an) <= 0.3 for al, an in active_zone_coords):
