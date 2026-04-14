@@ -1386,6 +1386,70 @@ def compute_gaps(access_data, reservation_data, zones_data, team_id='gyeonggi'):
     return gaps[:50]
 
 
+def compute_reentry_zones(closed_data, access_data, reservation_data, team_id='gyeonggi'):
+    """폐쇄존 중 재진입 추천구역 필터링
+    조건: 1) 평균 운영대수 >= 1, 2) 운영 30일 이상, 3) 반경 1km 내 접속/예약 있음
+    """
+    # 접속/예약 격자 구축
+    access_grid = {}
+    for r in access_data:
+        lat, lng = float(r['lat']), float(r['lng'])
+        key = (round(lat, 3), round(lng, 3))
+        access_grid[key] = access_grid.get(key, 0) + int(r['access_count'])
+
+    res_grid = {}
+    for r in reservation_data:
+        lat, lng = float(r['lat']), float(r['lng'])
+        key = (round(lat, 3), round(lng, 3))
+        res_grid[key] = res_grid.get(key, 0) + int(r['reservation_count'])
+
+    RADIUS_KM = 1.0
+    num_months = 3
+    results = []
+    for z in closed_data:
+        # 조건 1: 평균 운영대수 >= 1
+        if float(z.get('hist_car_count', 0)) < 1:
+            continue
+        # 조건 2: 운영 30일 이상
+        if int(z.get('operation_days', 0)) < 30:
+            continue
+        # 조건 3: 반경 1km 내 접속/예약 유저 존재
+        zlat, zlng = float(z['lat']), float(z['lng'])
+        nearby_access = 0
+        nearby_res = 0
+        for (glat, glng), cnt in access_grid.items():
+            if haversine_km(zlat, zlng, glat, glng) <= RADIUS_KM:
+                nearby_access += cnt
+        for (glat, glng), cnt in res_grid.items():
+            if haversine_km(zlat, zlng, glat, glng) <= RADIUS_KM:
+                nearby_res += cnt
+        if nearby_access == 0 and nearby_res == 0:
+            continue
+        results.append({
+            'zone_id': z.get('zone_id', ''),
+            'zone_name': z.get('zone_name', ''),
+            'parking_name': z.get('parking_name', ''),
+            'lat': zlat, 'lng': zlng,
+            'region2': z.get('region2', ''),
+            'region3': z.get('region3', ''),
+            'address': z.get('address', ''),
+            'operation_days': int(z.get('operation_days', 0)),
+            'hist_car_count': float(z.get('hist_car_count', 0)),
+            'revenue_per_car_28d': float(z.get('revenue_per_car_28d', 0)),
+            'gp_per_car_28d': float(z.get('gp_per_car_28d', 0)),
+            'utilization_rate': float(z.get('utilization_rate', 0)),
+            'first_date': z.get('first_date', ''),
+            'last_date': z.get('last_date', ''),
+            'nearby_access': round(nearby_access / num_months),
+            'nearby_res': round(nearby_res / num_months),
+        })
+
+    # 주변 접속 월평균 100건 이상만
+    results = [r for r in results if r['nearby_access'] >= 100]
+    results.sort(key=lambda x: -(x['nearby_access'] + x['nearby_res']))
+    return results[:50]
+
+
 def query_weekly_trends(team_id='gyeonggi'):
     """region2별 주간 접속/예약/공급 추이 (최근 12주)"""
     bb = _team_bbox(team_id)
@@ -2023,7 +2087,7 @@ def _read_ngrok_url():
         return ''
 
 
-def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, parking_contract=None, timeline_data=None, closed_data=None, team_id='gyeonggi'):
+def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, parking_contract=None, timeline_data=None, closed_data=None, reentry_data=None, team_id='gyeonggi'):
     """잠재 수요 지도 HTML 생성"""
     team_name = TEAM_CONFIG[team_id]['name']
     team_center = TEAM_CONFIG[team_id]['center']
@@ -2304,6 +2368,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
     <div class="sidebar-section">
         <div class="sidebar-section-title">분석</div>
         <button class="sidebar-btn" id="toggleGap"><span class="dot" style="background:#8e44ad"></span>미진출 지역 분석</button>
+        <button class="sidebar-btn" id="toggleReentry"><span class="dot" style="background:#43a047"></span>재진입 추천구역</button>
         <button class="sidebar-btn" id="toggleAnalysis"><span class="dot" style="background:#ef5350"></span>수요/공급 비교 분석</button>
         <button class="sidebar-btn" id="toggleMarketShare"><span class="dot" style="background:#ff7043"></span>Market Share</button>
     </div>
@@ -2342,6 +2407,20 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         </select>
     </div>
     <div id="gapList"></div>
+</div>
+
+<div class="gap-panel" id="reentryPanel" style="width:400px;">
+    <h3>재진입 추천구역</h3>
+    <div style="font-size:11px;color:#8b95a5;margin-bottom:8px;font-weight:500;">폐쇄존 중 운영대수 &ge;1, 운영 1개월+, 주변 수요 존재</div>
+    <div id="reentryRegionFilter" style="margin-bottom:10px;display:flex;align-items:center;gap:6px;{'display:none;' if len(TEAM_CONFIG[team_id]['regions']) <= 1 else ''}">
+        <span style="font-size:11px;color:#8b95a5;font-weight:600;">지역</span>
+        <select id="reentryRegionSelect" style="padding:6px 12px;border-radius:8px;border:1px solid #e8eaed;background:#fff;color:#1a1a1a;font-size:12px;font-weight:600;">
+            <option value="">전체 지역</option>
+            {''.join(f'<option value="{r}">{r}</option>' for r in TEAM_CONFIG[team_id]['regions'])}
+        </select>
+    </div>
+    <div style="font-size:10px;color:#8b95a5;margin-bottom:6px;display:flex;justify-content:space-between;"><span>존 이름</span><span>주변수요 | 운영대수 | 운영일</span></div>
+    <div id="reentryList"></div>
 </div>
 
 <div class="gap-panel" id="analysisPanel" style="width:820px;">
@@ -2418,6 +2497,7 @@ var resData = {jd(res_heat)};
 var dtodData = {jd(dtod_dots)};
 var zonesData = {jd(zones_data)};
 var gapsData = {jd(gaps)};
+var reentryData = {jd(reentry_data or [])};
 var analysisGrowth = {jd(analysis_growth)};
 var analysisDecline = {jd(analysis_decline)};
 var gcarData = {jd(gcar_zones)};
@@ -2780,6 +2860,54 @@ if (gapRegionSelect) {{
     }});
 }}
 
+// 재진입 추천구역 레이어
+var reentryLayer = L.layerGroup();
+reentryData.forEach(function(z) {{
+    var demand = (z.nearby_access || 0) + (z.nearby_res || 0);
+    L.circleMarker([z.lat, z.lng], {{
+        radius: Math.max(8, Math.min(20, 6 + Math.log10(demand + 1) * 3)),
+        fillColor: '#43a047', color: '#2e7d32', weight: 2, opacity: 0.9, fillOpacity: 0.5
+    }}).bindPopup(
+        '<div class="popup-title">' + z.zone_name + '</div>' +
+        '<div class="popup-row"><span class="popup-label">주차장</span>' + z.parking_name + '</div>' +
+        '<div class="popup-row"><span class="popup-label">주소</span>' + z.address + '</div>' +
+        '<div class="popup-row"><span class="popup-label">주변접속/월</span><b>' + (z.nearby_access||0).toLocaleString() + '</b></div>' +
+        '<div class="popup-row"><span class="popup-label">주변예약/월</span><b>' + (z.nearby_res||0).toLocaleString() + '</b></div>' +
+        '<div class="popup-row"><span class="popup-label">과거운영대수</span><b>' + z.hist_car_count + '</b></div>' +
+        '<div class="popup-row"><span class="popup-label">운영일수</span><b>' + z.operation_days + '일</b></div>' +
+        '<div class="popup-row"><span class="popup-label">운영기간</span>' + z.first_date + ' ~ ' + z.last_date + '</div>' +
+        '<div class="popup-row"><span class="popup-label">가동률</span><b>' + z.utilization_rate + '%</b></div>' +
+        '<div class="popup-row"><span class="popup-label">매출/대(28일)</span><b>' + (z.revenue_per_car_28d||0).toLocaleString() + '원</b></div>'
+    ).addTo(reentryLayer);
+}});
+
+var reentryListDiv = document.getElementById('reentryList');
+function renderReentryList(filterRegion) {{
+    reentryListDiv.innerHTML = '';
+    var filtered = reentryData.filter(function(z) {{ return !filterRegion || z.region2 === filterRegion; }});
+    if (filtered.length === 0) {{
+        reentryListDiv.innerHTML = '<div style="text-align:center;color:#8b95a5;padding:20px;font-size:12px;">조건에 맞는 추천구역이 없습니다</div>';
+        return;
+    }}
+    filtered.forEach(function(z) {{
+        var row = document.createElement('div');
+        row.className = 'gap-row';
+        var demand = (z.nearby_access||0) + (z.nearby_res||0);
+        row.innerHTML = '<span class="gap-name" style="font-size:12px;">' + z.zone_name + '</span>' +
+            '<span class="gap-cnt" style="font-size:10px">' + demand.toLocaleString() + '/월 | ' + z.hist_car_count + '대 | ' + z.operation_days + '일</span>';
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', function() {{ map.setView([z.lat, z.lng], 16); }});
+        reentryListDiv.appendChild(row);
+    }});
+}}
+renderReentryList('');
+var reentryRegionSelect = document.getElementById('reentryRegionSelect');
+if (reentryRegionSelect) {{
+    reentryRegionSelect.addEventListener('change', function() {{
+        renderReentryList(this.value);
+    }});
+}}
+
 // 그린카 존 레이어
 var gcarLayer = L.layerGroup();
 gcarData.forEach(function(g) {{
@@ -2879,7 +3007,7 @@ document.querySelectorAll('#marketSharePanel th').forEach(function(th) {{
 }});
 renderMarketShare();
 
-var showAccess = true, showRes = true, showZones = true, showGap = false, showAnalysis = false, showDtod = false, showGcar = false, showClosed = false, showMarketShare = false;
+var showAccess = true, showRes = true, showZones = true, showGap = false, showReentry = false, showAnalysis = false, showDtod = false, showGcar = false, showClosed = false, showMarketShare = false;
 function styleBtn(btn, active) {{
     if (active) btn.classList.add('active');
     else btn.classList.remove('active');
@@ -2924,6 +3052,12 @@ document.getElementById('toggleGap').addEventListener('click', function() {{
     hidePanels();
     if (!wasOn) {{ showGap = true; document.getElementById('gapPanel').style.display = 'block'; gapLayer.addTo(map); }}
     styleBtn(this, showGap);
+}});
+document.getElementById('toggleReentry').addEventListener('click', function() {{
+    var wasOn = showReentry;
+    hidePanels();
+    if (!wasOn) {{ showReentry = true; document.getElementById('reentryPanel').style.display = 'block'; reentryLayer.addTo(map); }}
+    styleBtn(this, showReentry);
 }});
 
 // 공급 분석 테이블
@@ -3020,10 +3154,12 @@ document.querySelectorAll('#analysisPanel th').forEach(function(th) {{
 renderAnalysis();
 
 function hidePanels() {{
-    ['gapPanel','analysisPanel','marketSharePanel'].forEach(function(id) {{ document.getElementById(id).style.display = 'none'; }});
-    showGap = false; showAnalysis = false; showMarketShare = false;
+    ['gapPanel','reentryPanel','analysisPanel','marketSharePanel'].forEach(function(id) {{ document.getElementById(id).style.display = 'none'; }});
+    showGap = false; showReentry = false; showAnalysis = false; showMarketShare = false;
     map.removeLayer(gapLayer);
+    map.removeLayer(reentryLayer);
     styleBtn(document.getElementById('toggleGap'), false);
+    styleBtn(document.getElementById('toggleReentry'), false);
     styleBtn(document.getElementById('toggleAnalysis'), false);
     styleBtn(document.getElementById('toggleMarketShare'), false);
 }}
@@ -3059,6 +3195,7 @@ styleBtn(document.getElementById('toggleRes'), true);
 styleBtn(document.getElementById('toggleDtod'), false);
 styleBtn(document.getElementById('toggleZones'), true);
 styleBtn(document.getElementById('toggleGap'), false);
+styleBtn(document.getElementById('toggleReentry'), false);
 styleBtn(document.getElementById('toggleAnalysis'), false);
 styleBtn(document.getElementById('toggleGcar'), false);
 styleBtn(document.getElementById('toggleClosed'), false);
@@ -3812,6 +3949,10 @@ def regenerate_from_cache(team_id='gyeonggi'):
     # 폐쇄 존 데이터 로드
     closed_data = _load_cache("closed", team_id) or []
 
+    # 재진입 추천구역 계산
+    reentry_data = compute_reentry_zones(closed_data, access, reservation, team_id=team_id)
+    print(f"  재진입 추천구역: {len(reentry_data)} 지역")
+
     # 쏘카 지역별 실 운영 차량 로드
     socar_supply = _load_cache("socar_supply", team_id) or {}
 
@@ -3833,7 +3974,7 @@ def regenerate_from_cache(team_id='gyeonggi'):
 
     html = generate_index(access, reservation, zones, gaps, analysis, dtod, profit_data,
                           gcar_data=gcar_data, socar_supply=socar_supply, parking_contract=parking_contract,
-                          timeline_data=timeline_data, closed_data=closed_data, team_id=team_id)
+                          timeline_data=timeline_data, closed_data=closed_data, reentry_data=reentry_data, team_id=team_id)
     out_dir = _team_output_dir(team_id)
     path = os.path.join(out_dir, "index.html")
     with open(path, "w") as f:
