@@ -1386,10 +1386,14 @@ def compute_gaps(access_data, reservation_data, zones_data, team_id='gyeonggi'):
     return gaps[:50]
 
 
-def compute_reentry_zones(closed_data, access_data, reservation_data, team_id='gyeonggi'):
+def compute_reentry_zones(closed_data, access_data, reservation_data, zones_data=None, team_id='gyeonggi'):
     """폐쇄존 중 재진입 추천구역 필터링
-    조건: 1) 평균 운영대수 >= 1, 2) 운영 30일 이상, 3) 반경 1km 내 접속/예약 있음
+    조건: 1) 평균 운영대수 >= 1, 2) 운영 30일 이상, 3) 반경 1km 내 접속/예약 있음, 4) 300m 내 운영존 없음
     """
+    # 현재 운영 존 좌표
+    active_zone_coords = []
+    if zones_data:
+        active_zone_coords = [(float(z['lat']), float(z['lng'])) for z in zones_data]
     # 접속/예약 격자 구축
     access_grid = {}
     for r in access_data:
@@ -1413,8 +1417,11 @@ def compute_reentry_zones(closed_data, access_data, reservation_data, team_id='g
         # 조건 2: 운영 30일 이상
         if int(z.get('operation_days', 0)) < 30:
             continue
-        # 조건 3: 반경 1km 내 접속/예약 유저 존재
+        # 조건 3: 300m 내 운영 존 없음
         zlat, zlng = float(z['lat']), float(z['lng'])
+        if active_zone_coords and any(haversine_km(zlat, zlng, al, an) <= 0.3 for al, an in active_zone_coords):
+            continue
+        # 조건 4: 반경 1km 내 접속/예약 유저 존재
         nearby_access = 0
         nearby_res = 0
         for (glat, glng), cnt in access_grid.items():
@@ -3950,7 +3957,7 @@ def regenerate_from_cache(team_id='gyeonggi'):
     closed_data = _load_cache("closed", team_id) or []
 
     # 재진입 추천구역 계산
-    reentry_data = compute_reentry_zones(closed_data, access, reservation, team_id=team_id)
+    reentry_data = compute_reentry_zones(closed_data, access, reservation, zones_data=zones, team_id=team_id)
     print(f"  재진입 추천구역: {len(reentry_data)} 지역")
 
     # 쏘카 지역별 실 운영 차량 로드
