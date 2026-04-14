@@ -109,6 +109,28 @@ def filter_by_polygon(data, team_id, lat_key='lat', lng_key='lng'):
     return [r for r in data if poly.contains(Point(float(r[lng_key]), float(r[lat_key])))]
 
 
+def _get_region1_by_polygon(lat, lng, team_id):
+    """좌표가 속하는 시도(region1)를 polygon 기반으로 반환"""
+    provinces = _load_provinces()
+    regions = TEAM_CONFIG[team_id]['regions']
+    name_map = {
+        '강원특별자치도': '강원도', '강원도': '강원도',
+        '전북특별자치도': '전라북도',
+        '세종특별자치시': '세종특별자치시',
+    }
+    reverse_map = {}
+    for r in regions:
+        geojson_name = name_map.get(r, r)
+        reverse_map[geojson_name] = r
+    pt = Point(lng, lat)
+    for feat in provinces['features']:
+        fname = feat['properties'].get('name', '')
+        if fname in reverse_map:
+            if shape(feat['geometry']).contains(pt):
+                return reverse_map[fname]
+    return ''
+
+
 _REGION_ALIASES = {
     '강원도': ['강원도', '강원특별자치도'],
     '전북특별자치도': ['전북특별자치도', '전라북도'],
@@ -1730,15 +1752,28 @@ def reverse_geocode(gaps, team_id='gyeonggi', zones_data=None):
             if check_str.strip() and not any(kw in check_str for kw in other_kws):
                 is_team = True
         if is_team:
-            # region1 추출: province 또는 city에서 팀 region 매칭
-            gap_region1 = ''
-            for r in team_regions:
-                kw = r.replace('특별시','').replace('광역시','').replace('특별자치도','').replace('특별자치시','').replace('도','')
-                if kw in (province or '') or kw in (city or ''):
-                    gap_region1 = r
-                    break
+            # region1: polygon 기반 확정 (Nominatim province 대신)
+            gap_region1 = _get_region1_by_polygon(g['lat'], g['lng'], team_id)
             results.append({**g, 'name': name, 'region1': gap_region1})
         time.sleep(1.1)
+
+    # 같은 이름의 인접 gap 병합 (접속/예약 합산, 좌표는 가중 평균)
+    merged = {}
+    for g in results:
+        key = g['name']
+        if key in merged:
+            m = merged[key]
+            total = m['access_count'] + g['access_count']
+            if total > 0:
+                w1, w2 = m['access_count'] / total, g['access_count'] / total
+                m['lat'] = m['lat'] * w1 + g['lat'] * w2
+                m['lng'] = m['lng'] * w1 + g['lng'] * w2
+            m['access_count'] += g['access_count']
+            m['reservation_count'] += g['reservation_count']
+            m['nearest_zone_km'] = min(m['nearest_zone_km'], g['nearest_zone_km'])
+        else:
+            merged[key] = dict(g)
+    results = sorted(merged.values(), key=lambda x: -x['access_count'])
 
     return results
 
