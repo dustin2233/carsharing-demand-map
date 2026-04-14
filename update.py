@@ -2897,6 +2897,9 @@ reentryData.forEach(function(z) {{
         '<div class="popup-title">' + z.zone_name + ' <span class="popup-badge" style="background:#ec407a">재진입 추천</span></div>' +
         '<div class="popup-row"><span class="popup-label">주차장</span><span>' + z.parking_name + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">주소</span><span>' + z.address + '</span></div>' +
+        (z.provider_name ? '<div class="popup-row"><span class="popup-label">거래처</span><span><b>' + z.provider_name + '</b></span></div>' : '') +
+        (z.settlement_type ? '<div class="popup-row"><span class="popup-label">정산방식</span><span>' + z.settlement_type + '</span></div>' : '') +
+        (z.price_per_car ? '<div class="popup-row"><span class="popup-label">대당 주차비</span><span><b>' + (z.price_per_car).toLocaleString() + '</b>원/월</span></div>' : '') +
         '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>' +
         '<div style="font-size:10px;color:#8b95a5;font-weight:700;margin-bottom:4px;">주변 수요</div>' +
         '<div class="popup-row"><span class="popup-label">접속/월</span><span><b style="color:#0064FF">' + (z.nearby_access||0).toLocaleString() + '</b></span></div>' +
@@ -3980,8 +3983,17 @@ def regenerate_from_cache(team_id='gyeonggi'):
     # 폐쇄 존 데이터 로드
     closed_data = _load_cache("closed", team_id) or []
 
-    # 재진입 추천구역 계산
+    # 주차 계약 로드
+    parking_contract = _load_cache("parking_contract", team_id) or {}
+
+    # 재진입 추천구역 계산 + 거래처 정보 매칭
     reentry_data = compute_reentry_zones(closed_data, access, reservation, zones_data=zones, team_id=team_id)
+    pc_map = {int(k): v for k, v in parking_contract.items()} if parking_contract else {}
+    for r in reentry_data:
+        pc = pc_map.get(int(r.get('zone_id', 0)), {})
+        r['provider_name'] = pc.get('provider_name', '')
+        r['settlement_type'] = pc.get('settlement_type', '')
+        r['price_per_car'] = pc.get('price_per_car', 0)
     print(f"  재진입 추천구역: {len(reentry_data)} 지역")
 
     # 쏘카 지역별 실 운영 차량 로드
@@ -3989,9 +4001,6 @@ def regenerate_from_cache(team_id='gyeonggi'):
 
     # 예약 타임라인 로드
     timeline_data = _load_cache("timeline", team_id) or {}
-
-    # 주차 계약 로드
-    parking_contract = _load_cache("parking_contract", team_id) or {}
 
     # 히트맵: 행정구역 polygon 필터 + 동적 격자 수 제한
     access = filter_by_polygon(access, team_id)
