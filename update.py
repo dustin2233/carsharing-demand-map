@@ -2379,7 +2379,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
     <div class="sidebar-section">
         <div class="sidebar-section-title">분석</div>
         <button class="sidebar-btn" id="toggleGap"><span class="dot" style="background:#8e44ad"></span>미진출 지역 분석</button>
-        <button class="sidebar-btn" id="toggleReentry"><span class="dot" style="background:#ff6f00"></span>재진입 추천구역</button>
+        <button class="sidebar-btn" id="toggleReentry"><span class="dot" style="background:#ec407a"></span>재진입 추천구역</button>
         <button class="sidebar-btn" id="toggleAnalysis"><span class="dot" style="background:#ef5350"></span>수요/공급 비교 분석</button>
         <button class="sidebar-btn" id="toggleMarketShare"><span class="dot" style="background:#ff7043"></span>Market Share</button>
     </div>
@@ -2877,7 +2877,7 @@ reentryData.forEach(function(z) {{
     var demand = (z.nearby_access || 0) + (z.nearby_res || 0);
     L.circleMarker([z.lat, z.lng], {{
         radius: Math.max(8, Math.min(20, 6 + Math.log10(demand + 1) * 3)),
-        fillColor: '#ff6f00', color: '#e65100', weight: 2, opacity: 0.9, fillOpacity: 0.5
+        fillColor: '#ec407a', color: '#c2185b', weight: 2, opacity: 0.9, fillOpacity: 0.5
     }}).bindPopup(
         '<div class="popup-title">' + z.zone_name + '</div>' +
         '<div class="popup-row"><span class="popup-label">주차장</span>' + z.parking_name + '</div>' +
