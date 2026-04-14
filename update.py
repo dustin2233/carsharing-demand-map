@@ -1437,6 +1437,7 @@ def compute_reentry_zones(closed_data, access_data, reservation_data, zones_data
             'zone_name': z.get('zone_name', ''),
             'parking_name': z.get('parking_name', ''),
             'lat': zlat, 'lng': zlng,
+            'region1': _get_region1_by_polygon(zlat, zlng, team_id),
             'region2': z.get('region2', ''),
             'region3': z.get('region3', ''),
             'address': z.get('address', ''),
@@ -2891,7 +2892,7 @@ reentryData.forEach(function(z) {{
 var reentryListDiv = document.getElementById('reentryList');
 function renderReentryList(filterRegion) {{
     reentryListDiv.innerHTML = '';
-    var filtered = reentryData.filter(function(z) {{ return !filterRegion || z.region2 === filterRegion; }});
+    var filtered = reentryData.filter(function(z) {{ return !filterRegion || z.region1 === filterRegion; }});
     if (filtered.length === 0) {{
         reentryListDiv.innerHTML = '<div style="text-align:center;color:#8b95a5;padding:20px;font-size:12px;">조건에 맞는 추천구역이 없습니다</div>';
         return;
