@@ -284,10 +284,10 @@ def query_dtod(team_id='gyeonggi'):
       AND d.start_lng BETWEEN {bb['lng'][0]} AND {bb['lng'][1]}
       AND d.start_lat IS NOT NULL AND d.start_lng IS NOT NULL
     GROUP BY 1, 2
+    HAVING call_count >= 12
     ORDER BY call_count DESC
-    LIMIT 3000
     """
-    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=3000", sql]
+    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=10000", sql]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"BQ error: {result.stderr}")
@@ -1224,6 +1224,65 @@ def query_zone_profit(team_id='gyeonggi'):
             'revenue_per_res': int(float(r.get('revenue_per_res', 0) or 0)),
         }
     return profit_by_zone
+
+
+def query_dashboard_metrics(team_id='gyeonggi'):
+    """월별 실적 집계 (최근 14개월) — 실적 대시보드용 캐시"""
+    region_filter = _region1_sql(team_id)
+    sql = f"""
+    WITH profit_monthly AS (
+        SELECT
+            FORMAT_DATE('%Y-%m', date) AS month,
+            COUNT(DISTINCT zone_id)  AS active_zones,
+            COUNT(DISTINCT car_id)   AS active_cars,
+            CAST(SUM(revenue) AS INT64) AS total_revenue,
+            CAST(SUM(profit)  AS INT64) AS total_gp,
+            CAST(SUM(nuse)    AS INT64) AS total_nuse,
+            SUM(opr_day) AS total_opr_day,
+            ROUND(SAFE_DIVIDE(SUM(revenue) * 28, NULLIF(SUM(opr_day), 0))) AS revenue_per_car_28d,
+            ROUND(SAFE_DIVIDE(SUM(profit)  * 28, NULLIF(SUM(opr_day), 0))) AS gp_per_car_28d,
+            ROUND(SAFE_DIVIDE(SUM(revenue), NULLIF(SUM(nuse), 0)))          AS revenue_per_res
+        FROM `socar-data.socar_biz_profit.profit_socar_car_daily`
+        WHERE {region_filter}
+            AND car_state IN ('운영', '수리')
+            AND car_sharing_type IN ('socar', 'zplus')
+            AND date >= DATE_TRUNC(DATE_SUB(CURRENT_DATE('Asia/Seoul'), INTERVAL 14 MONTH), MONTH)
+        GROUP BY 1
+    ),
+    util_monthly AS (
+        SELECT
+            FORMAT_DATE('%Y-%m', date) AS month,
+            ROUND(SAFE_DIVIDE(SUM(op_min), SUM(dp_min) - SUM(bl_min)) * 100, 1) AS utilization_rate
+        FROM `socar-data.socar_biz.operation_per_car_daily_v2`
+        WHERE {region_filter}
+            AND date >= DATE_TRUNC(DATE_SUB(CURRENT_DATE('Asia/Seoul'), INTERVAL 14 MONTH), MONTH)
+        GROUP BY 1
+    )
+    SELECT p.*, COALESCE(u.utilization_rate, 0) AS utilization_rate
+    FROM profit_monthly p
+    LEFT JOIN util_monthly u ON p.month = u.month
+    ORDER BY p.month
+    """
+    try:
+        rows = run_bq(sql, max_rows=20)
+    except Exception as e:
+        print(f"  [경고] 대시보드 월별 실적 조회 실패: {e}")
+        return {"monthly": []}
+    monthly = []
+    for r in rows:
+        monthly.append({
+            'month': r['month'],
+            'active_zones': int(r.get('active_zones', 0) or 0),
+            'active_cars':  int(r.get('active_cars', 0) or 0),
+            'total_revenue': int(r.get('total_revenue', 0) or 0),
+            'total_gp':      int(r.get('total_gp', 0) or 0),
+            'total_nuse':    int(r.get('total_nuse', 0) or 0),
+            'revenue_per_car_28d': int(float(r.get('revenue_per_car_28d', 0) or 0)),
+            'gp_per_car_28d':      int(float(r.get('gp_per_car_28d', 0) or 0)),
+            'utilization_rate':    float(r.get('utilization_rate', 0) or 0),
+            'revenue_per_res':     int(float(r.get('revenue_per_res', 0) or 0)),
+        })
+    return {'monthly': monthly, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M')}
 
 
 def haversine_km(lat1, lng1, lat2, lng2):
@@ -2167,7 +2226,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
     num_weeks = 90 / 7
     access_heat = [[float(r['lat']), float(r['lng']), round(int(r['access_count']) / num_weeks)] for r in access_data]
     res_heat = [[float(r['lat']), float(r['lng']), round(int(r['reservation_count']) / num_weeks)] for r in reservation_data]
-    dtod_dots = [[float(r['lat']), float(r['lng']), round(int(r['call_count']) / num_weeks)] for r in dtod_data]
+    dtod_dots = [[float(r['lat']), float(r['lng']), int(r['call_count'])] for r in dtod_data]
 
     # gcar 데이터 변환
     gcar_zones = []
@@ -2846,7 +2905,7 @@ dtodData.forEach(function(d) {{
     L.circleMarker([d[0], d[1]], {{
         radius: dotRadius(d[2], maxDtodVal), fillColor: '#ff4081', color: '#fff',
         weight: 1.5, fillOpacity: dotOpacity(d[2], maxDtodVal)
-    }}).bindPopup('<div style="font-weight:600">부름 호출 지점</div><div>주평균 호출: <b>' + d[2].toLocaleString() + '</b></div>').addTo(dtodLayer);
+    }}).bindPopup('<div style="font-weight:600">부름 호출 지점</div><div>90일간 호출: <b>' + d[2].toLocaleString() + '건</b></div>').addTo(dtodLayer);
 }});
 
 var gapLayer = L.layerGroup();
@@ -4010,7 +4069,7 @@ def regenerate_from_cache(team_id='gyeonggi'):
     grid_limit = _calc_grid_limit(len(zones))
     access = sorted(access, key=lambda x: -int(x['access_count']))[:grid_limit]
     reservation = sorted(reservation, key=lambda x: -int(x['reservation_count']))[:grid_limit]
-    dtod = sorted(dtod, key=lambda x: -int(x['call_count']))[:grid_limit]
+    dtod = sorted(dtod, key=lambda x: -int(x['call_count']))  # HAVING >= 12 already applied
 
     html = generate_index(access, reservation, zones, gaps, analysis, dtod, profit_data,
                           gcar_data=gcar_data, socar_supply=socar_supply, parking_contract=parking_contract,
@@ -4059,6 +4118,10 @@ def main(team_id='gyeonggi'):
     print("  5.1/6 존별 실적 조회 (profit_socar_car_daily)...")
     profit_data = query_zone_profit(team_id=team_id)
     print(f"       {len(profit_data)} 존 실적")
+
+    print("  5.1b/6 월별 실적 집계 (대시보드용)...")
+    dashboard_metrics = query_dashboard_metrics(team_id=team_id)
+    print(f"       {len(dashboard_metrics.get('monthly', []))} 개월 데이터")
 
     print("  5.2/6 그린카 존 현황 조회 (gcar_info_log)...")
     gcar_data = query_gcar_zones(team_id=team_id)
@@ -4120,7 +4183,8 @@ def main(team_id='gyeonggi'):
                        ("dtod", dtod_raw),
                        ("profit", profit_data), ("gcar", gcar_data),
                        ("closed", closed_data),
-                       ("socar_supply", socar_supply), ("timeline", timeline_data)]:
+                       ("socar_supply", socar_supply), ("timeline", timeline_data),
+                       ("dashboard_metrics", dashboard_metrics)]:
         _save_cache(name, data, team_id=team_id)
 
     print("  HTML 생성...")

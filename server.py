@@ -53,12 +53,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.handle_simulate_eval()
         elif self.path == '/api/d2d-destinations':
             self.handle_d2d_destinations()
+        elif self.path == '/api/dashboard-analyze':
+            self.handle_dashboard_analyze()
         else:
             self.send_error(404)
 
     def do_GET(self):
         if self.path == '/api/status':
             self.handle_status()
+        elif self.path.startswith('/api/dashboard'):
+            self.handle_dashboard()
         else:
             super().do_GET()
 
@@ -205,6 +209,123 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             import traceback
             traceback.print_exc()
+            self._send_json(500, {'error': str(e)})
+
+    def handle_dashboard(self):
+        """실적 대시보드 데이터 — 캐시 파일 조합"""
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        team_id = qs.get('team_id', ['gyeonggi'])[0]
+        cache_dir = os.path.join(DIR, '.cache', team_id)
+
+        def load(name):
+            p = os.path.join(cache_dir, f'{name}.json')
+            if os.path.exists(p):
+                with open(p) as f:
+                    return json.load(f)
+            return None
+
+        zones = load('zones') or []
+        profit = load('profit') or {}
+        supply_demand = load('supply_demand') or {}
+        dashboard_metrics = load('dashboard_metrics') or {}
+
+        # 존+실적 병합
+        profit_int = {int(k): v for k, v in profit.items()}
+        zone_rows = []
+        for z in zones:
+            zid = int(z['zone_id'])
+            p = profit_int.get(zid, {})
+            zone_rows.append({
+                'zone_id': zid,
+                'zone_name': z.get('zone_name', ''),
+                'region1': z.get('region1', ''),
+                'region2': z.get('region2', ''),
+                'region3': z.get('region3', ''),
+                'car_count': int(z.get('car_count', 0)),
+                'total_revenue': p.get('total_revenue', 0),
+                'revenue_per_car_28d': p.get('revenue_per_car_28d', 0),
+                'gp_per_car_28d': p.get('gp_per_car_28d', 0),
+                'utilization_rate': p.get('utilization_rate', 0),
+                'revenue_per_res': p.get('revenue_per_res', 0),
+            })
+
+        # 팀 전체 요약 (supply_demand 첫 번째 항목 = 팀 전체)
+        summary = {}
+        for section in ('growth', 'decline'):
+            for item in (supply_demand.get(section) or []):
+                if '전체' in item.get('region2', ''):
+                    summary = item
+                    break
+            if summary:
+                break
+
+        self._send_json(200, {
+            'team_id': team_id,
+            'summary': summary,
+            'zones': zone_rows,
+            'monthly': dashboard_metrics.get('monthly', []),
+            'generated_at': dashboard_metrics.get('generated_at') or get_last_update(LAST_UPDATE_ZONE),
+        })
+
+    def handle_dashboard_analyze(self):
+        """LLM 실적 분석 — 사용자 API 키로 Claude/OpenAI 호출"""
+        import urllib.request as req_lib
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+        except Exception:
+            self._send_json(400, {'error': '요청 파싱 실패'})
+            return
+
+        api_key = body.get('api_key', '').strip()
+        model = body.get('model', 'claude-sonnet-4-5')
+        prompt = body.get('prompt', '')
+
+        if not api_key or not prompt:
+            self._send_json(400, {'error': 'api_key와 prompt가 필요합니다'})
+            return
+
+        try:
+            if model.startswith('gpt') or model.startswith('o'):
+                # OpenAI
+                payload = json.dumps({
+                    'model': model,
+                    'messages': [{'role': 'user', 'content': prompt}],
+                    'max_tokens': 2000,
+                    'temperature': 0.3,
+                }).encode()
+                request = req_lib.Request(
+                    'https://api.openai.com/v1/chat/completions',
+                    data=payload,
+                    headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'},
+                )
+                with req_lib.urlopen(request, timeout=60) as resp:
+                    result = json.loads(resp.read())
+                text = result['choices'][0]['message']['content']
+            else:
+                # Anthropic Claude
+                payload = json.dumps({
+                    'model': model,
+                    'max_tokens': 2000,
+                    'temperature': 0.3,
+                    'messages': [{'role': 'user', 'content': prompt}],
+                }).encode()
+                request = req_lib.Request(
+                    'https://api.anthropic.com/v1/messages',
+                    data=payload,
+                    headers={
+                        'Content-Type': 'application/json',
+                        'x-api-key': api_key,
+                        'anthropic-version': '2023-06-01',
+                    },
+                )
+                with req_lib.urlopen(request, timeout=60) as resp:
+                    result = json.loads(resp.read())
+                text = result['content'][0]['text']
+
+            self._send_json(200, {'result': text})
+        except Exception as e:
             self._send_json(500, {'error': str(e)})
 
     def log_message(self, format, *args):

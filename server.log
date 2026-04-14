@@ -116,3 +116,6 @@ Traceback (most recent call last):
     ~~~~~~~~~~~~~~~~~~^^^
 ConnectionResetError: [Errno 54] Connection reset by peer
 ----------------------------------------
+127.0.0.1 - - [14/Apr/2026 17:18:48] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [14/Apr/2026 17:19:26] "POST /api/simulate HTTP/1.1" 200 -
+127.0.0.1 - - [14/Apr/2026 17:20:02] "POST /api/simulate-eval HTTP/1.1" 200 -

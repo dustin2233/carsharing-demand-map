@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>경기강원 실적 대시보드</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; background: #f0f2f5; color: #1a1a2e; font-size: 14px; }
+
+/* ── Header ── */
+.header {
+  background: #0064FF;
+  color: #fff;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 56px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0,100,255,.3);
+}
+.header h1 { font-size: 17px; font-weight: 700; white-space: nowrap; }
+.header .subtitle { font-size: 12px; opacity: .75; }
+.header .spacer { flex: 1; }
+.header .updated { font-size: 11px; opacity: .7; }
+
+/* ── Period Tabs ── */
+.period-tabs {
+  display: flex;
+  background: rgba(255,255,255,.15);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+}
+.period-tabs button {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,.8);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.period-tabs button.active {
+  background: #fff;
+  color: #0064FF;
+}
+.period-tabs button:not(.active):hover { background: rgba(255,255,255,.2); color: #fff; }
+
+/* ── Team selector ── */
+.team-select {
+  background: rgba(255,255,255,.15);
+  border: 1px solid rgba(255,255,255,.3);
+  color: #fff;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.team-select option { color: #1a1a2e; background: #fff; }
+
+/* ── Update button ── */
+.update-btn {
+  background: rgba(255,255,255,.15);
+  border: 1px solid rgba(255,255,255,.35);
+  color: #fff;
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s;
+}
+.update-btn:hover:not(:disabled) { background: rgba(255,255,255,.28); }
+.update-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── Main Layout ── */
+.main { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+
+/* ── KPI Cards ── */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.kpi-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  position: relative;
+  overflow: hidden;
+}
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 4px; height: 100%;
+  background: var(--accent, #0064FF);
+  border-radius: 4px 0 0 4px;
+}
+.kpi-label { font-size: 11px; color: #666; font-weight: 600; letter-spacing: .3px; margin-bottom: 6px; }
+.kpi-value { font-size: 22px; font-weight: 800; color: #1a1a2e; line-height: 1; }
+.kpi-unit { font-size: 11px; color: #888; margin-left: 2px; }
+.kpi-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-top: 6px;
+}
+.kpi-badge.up { background: #e8f5e9; color: #2e7d32; }
+.kpi-badge.down { background: #ffebee; color: #c62828; }
+.kpi-badge.neutral { background: #f3f4f6; color: #666; }
+
+/* ── Charts ── */
+.chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+@media (max-width: 900px) { .chart-grid { grid-template-columns: 1fr; } }
+.chart-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+}
+.chart-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #333;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chart-title .dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+}
+.chart-wrap { position: relative; height: 220px; }
+
+/* ── Zone Table ── */
+.table-section {
+  background: #fff;
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  margin-bottom: 20px;
+}
+.table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.table-header h3 { font-size: 13px; font-weight: 700; color: #333; }
+.table-tabs {
+  display: flex;
+  gap: 4px;
+}
+.table-tabs button {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  color: #666;
+}
+.table-tabs button.active {
+  background: #0064FF;
+  border-color: #0064FF;
+  color: #fff;
+}
+.perf-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.perf-table th {
+  text-align: right;
+  padding: 6px 8px;
+  background: #f8f9fa;
+  border-bottom: 2px solid #e9ecef;
+  font-weight: 700;
+  color: #555;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.perf-table th:first-child { text-align: left; }
+.perf-table th:hover { background: #e9ecef; }
+.perf-table th .sort-icon { margin-left: 3px; color: #aaa; }
+.perf-table th.sorted .sort-icon { color: #0064FF; }
+.perf-table td {
+  text-align: right;
+  padding: 7px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  color: #333;
+}
+.perf-table td:first-child { text-align: left; }
+.perf-table tr:last-child td { border-bottom: none; }
+.perf-table tr:hover td { background: #f8f9ff; }
+.zone-name-cell { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.region-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #e8f0ff;
+  color: #0064FF;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+.rev-bar {
+  display: inline-block;
+  height: 6px;
+  background: #0064FF;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+  opacity: .6;
+}
+.util-bar {
+  display: inline-block;
+  height: 6px;
+  background: #10b981;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+  opacity: .6;
+}
+.rank-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  margin-right: 6px;
+}
+.rank-1 { background: #FFD700; color: #7a5800; }
+.rank-2 { background: #C0C0C0; color: #444; }
+.rank-3 { background: #cd7f32; color: #fff; }
+.rank-other { background: #f0f0f0; color: #666; }
+
+/* ── Monthly Selector (for Monthly view) ── */
+.month-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.month-nav button {
+  background: #f0f2f5;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.month-nav button:hover { background: #e0e5ff; }
+.month-nav .month-label {
+  font-size: 15px;
+  font-weight: 700;
+  min-width: 100px;
+  text-align: center;
+}
+.month-select {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ── AI Analysis Panel ── */
+.ai-panel {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  margin-bottom: 24px;
+}
+.ai-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.ai-panel-header h3 { font-size: 14px; font-weight: 700; }
+.ai-badge {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: .5px;
+}
+.ai-controls {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.ai-field { display: flex; flex-direction: column; gap: 4px; }
+.ai-field label { font-size: 11px; font-weight: 600; color: #555; }
+.ai-field input, .ai-field select {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color .15s;
+}
+.ai-field input:focus, .ai-field select:focus { border-color: #0064FF; }
+.ai-field input { min-width: 280px; }
+.ai-btn {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity .15s;
+  white-space: nowrap;
+}
+.ai-btn:hover { opacity: .9; }
+.ai-btn:disabled { opacity: .5; cursor: not-allowed; }
+.ai-result {
+  background: #f8f9ff;
+  border: 1px solid #e0e5ff;
+  border-radius: 8px;
+  padding: 16px;
+  min-height: 80px;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  color: #1a1a2e;
+  display: none;
+}
+.ai-result.show { display: block; }
+.ai-thinking {
+  color: #888;
+  font-style: italic;
+}
+
+/* ── Spinner ── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+/* ── Loading overlay ── */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(255,255,255,.8);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  gap: 12px;
+}
+.loading-spinner {
+  width: 40px; height: 40px;
+  border: 4px solid #e0e5ff;
+  border-top-color: #0064FF;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+.loading-text { font-size: 14px; color: #555; font-weight: 600; }
+
+/* ── YTD comparison ── */
+.ytd-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.compare-card {
+  background: #f8f9ff;
+  border-radius: 8px;
+  padding: 12px 14px;
+  border: 1px solid #e0e5ff;
+}
+.compare-card .label { font-size: 11px; color: #666; font-weight: 600; margin-bottom: 4px; }
+.compare-card .val { font-size: 18px; font-weight: 800; color: #1a1a2e; }
+.compare-card .change { font-size: 12px; margin-top: 2px; }
+.change.pos { color: #2e7d32; }
+.change.neg { color: #c62828; }
+
+/* ── Error ── */
+.error-box {
+  background: #fff3f3;
+  border: 1px solid #f5c6c6;
+  border-radius: 8px;
+  padding: 16px;
+  color: #c62828;
+  margin: 20px 0;
+  font-size: 13px;
+}
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">데이터 불러오는 중...</div>
+</div>
+
+<!-- Header -->
+<div class="header">
+  <div>
+    <div class="header h1" style="font-size:17px;font-weight:700;" id="teamTitle">경기강원 실적 대시보드</div>
+    <div class="subtitle" id="teamSubtitle">경기도 · 강원도</div>
+  </div>
+
+  <select class="team-select" id="teamSelect" onchange="changeTeam(this.value)">
+    <option value="gyeonggi">경기강원사업팀</option>
+    <option value="seoul">서울사업팀</option>
+    <option value="chungcheong">충청사업팀</option>
+    <option value="gyeongbuk">경북사업팀</option>
+    <option value="gyeongnam">부울경사업팀</option>
+    <option value="honam">호남사업팀</option>
+  </select>
+
+  <div class="spacer"></div>
+
+  <div class="period-tabs">
+    <button class="active" onclick="setPeriod('weekly', this)">주간 (4주)</button>
+    <button onclick="setPeriod('monthly', this)">월별</button>
+    <button onclick="setPeriod('ytd', this)">YTD</button>
+  </div>
+
+  <div class="updated" id="updatedAt"></div>
+  <button class="update-btn" id="updateBtn" onclick="runUpdate()" title="월별/YTD 데이터 포함 전체 업데이트">↻ 존/실적 업데이트</button>
+</div>
+
+<!-- Main -->
+<div class="main">
+
+  <!-- Period-specific controls -->
+  <div id="monthlyControls" style="display:none; margin-bottom:16px;">
+    <div class="month-nav">
+      <button onclick="shiftMonth(-1)">‹</button>
+      <div class="month-label" id="selectedMonthLabel">2026년 4월</div>
+      <button onclick="shiftMonth(1)">›</button>
+      <select class="month-select" id="monthSelect" onchange="selectMonth(this.value)"></select>
+    </div>
+  </div>
+
+  <!-- KPI Cards -->
+  <div class="kpi-grid" id="kpiGrid">
+    <!-- rendered by JS -->
+  </div>
+
+  <!-- Charts -->
+  <div class="chart-grid">
+    <div class="chart-card">
+      <div class="chart-title">
+        <div class="dot" style="background:#0064FF;"></div>
+        <span id="chart1Title">매출 / GP 추이</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart1"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">
+        <div class="dot" style="background:#10b981;"></div>
+        <span id="chart2Title">가동률 / 예약 추이</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart2"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Zone Performance Table -->
+  <div class="table-section">
+    <div class="table-header">
+      <h3>존별 실적 (최근 28일 기준)</h3>
+      <div class="table-tabs">
+        <button class="active" onclick="setTableMode('top', this)">우수 존 Top 20</button>
+        <button onclick="setTableMode('bottom', this)">저조 존 Bottom 20</button>
+        <button onclick="setTableMode('all', this)">전체</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="perf-table" id="zoneTable">
+        <thead>
+          <tr>
+            <th onclick="sortTable('zone_name')">존명 <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('region2')">지역 <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('car_count')">차량 <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('revenue_per_car_28d')" class="sorted">대당매출(28일) <span class="sort-icon">↓</span></th>
+            <th onclick="sortTable('gp_per_car_28d')">대당GP(28일) <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('utilization_rate')">가동률 <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('revenue_per_res')">건당매출 <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('total_revenue')">총매출(28일) <span class="sort-icon">↕</span></th>
+          </tr>
+        </thead>
+        <tbody id="zoneTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- AI Analysis -->
+  <div class="ai-panel">
+    <div class="ai-panel-header">
+      <h3>AI 실적 분석</h3>
+      <span class="ai-badge">✦ LLM</span>
+    </div>
+    <div class="ai-controls">
+      <div class="ai-field">
+        <label>모델 선택</label>
+        <select id="aiModel">
+          <option value="claude-sonnet-4-5-20251001">Claude Sonnet 4.5</option>
+          <option value="claude-opus-4-6">Claude Opus 4.6</option>
+          <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+          <option value="gpt-4o">GPT-4o</option>
+          <option value="gpt-4o-mini">GPT-4o mini</option>
+        </select>
+      </div>
+      <div class="ai-field">
+        <label>API Key</label>
+        <input type="password" id="aiApiKey" placeholder="sk-ant-... 또는 sk-..." />
+      </div>
+      <button class="ai-btn" id="analyzeBtn" onclick="runAnalysis()">✦ AI 분석하기</button>
+    </div>
+    <div class="ai-result" id="aiResult"></div>
+  </div>
+
+</div><!-- /main -->
+
+<script>
+/* ═══════════════════════════════════════════════
+   State
+═══════════════════════════════════════════════ */
+let dashData = null;
+let currentPeriod = 'weekly';
+let currentTeam = 'gyeonggi';
+let tableMode = 'top';
+let sortKey = 'revenue_per_car_28d';
+let sortAsc = false;
+let monthlyIdx = 0; // index into dashData.monthly for Monthly view
+let chart1 = null, chart2 = null;
+
+const TEAM_NAMES = {
+  gyeonggi: { title: '경기강원 실적 대시보드', sub: '경기도 · 강원도' },
+  seoul:    { title: '서울 실적 대시보드', sub: '서울특별시 · 인천광역시' },
+  chungcheong: { title: '충청 실적 대시보드', sub: '충청남도 · 충청북도 · 대전 · 세종' },
+  gyeongbuk: { title: '경북 실적 대시보드', sub: '경상북도 · 대구광역시' },
+  gyeongnam: { title: '부울경 실적 대시보드', sub: '부산 · 울산 · 경남' },
+  honam:    { title: '호남 실적 대시보드', sub: '전라남도 · 전라북도 · 광주' },
+};
+
+/* ═══════════════════════════════════════════════
+   Fetch
+═══════════════════════════════════════════════ */
+async function loadData(teamId) {
+  document.getElementById('loadingOverlay').style.display = 'flex';
+  try {
+    const res = await fetch(`/api/dashboard?team_id=${teamId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    dashData = await res.json();
+    // Init monthly index to last month with data
+    if (dashData.monthly && dashData.monthly.length > 0) {
+      monthlyIdx = dashData.monthly.length - 1;
+    }
+    renderAll();
+  } catch (e) {
+    document.getElementById('kpiGrid').innerHTML = `<div class="error-box">데이터 로드 실패: ${e.message}<br>서버가 실행 중인지 확인하세요 (python3 server.py)</div>`;
+  } finally {
+    document.getElementById('loadingOverlay').style.display = 'none';
+  }
+}
+
+function changeTeam(teamId) {
+  currentTeam = teamId;
+  const t = TEAM_NAMES[teamId] || TEAM_NAMES.gyeonggi;
+  document.getElementById('teamTitle').textContent = t.title;
+  document.getElementById('teamSubtitle').textContent = t.sub;
+  loadData(teamId);
+}
+
+/* ═══════════════════════════════════════════════
+   Period
+═══════════════════════════════════════════════ */
+function setPeriod(p, btn) {
+  currentPeriod = p;
+  document.querySelectorAll('.period-tabs button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('monthlyControls').style.display = p === 'monthly' ? 'block' : 'none';
+  renderAll();
+}
+
+/* ═══════════════════════════════════════════════
+   Render
+═══════════════════════════════════════════════ */
+function renderAll() {
+  if (!dashData) return;
+  if (dashData.generated_at) {
+    document.getElementById('updatedAt').textContent = `기준: ${dashData.generated_at}`;
+  }
+  populateMonthSelect();
+  renderKPIs();
+  renderCharts();
+  renderZoneTable();
+}
+
+/* ─── KPI ─── */
+function renderKPIs() {
+  const grid = document.getElementById('kpiGrid');
+  let cards = [];
+
+  if (currentPeriod === 'weekly') {
+    cards = buildWeeklyKPIs();
+  } else if (currentPeriod === 'monthly') {
+    cards = buildMonthlyKPIs();
+  } else {
+    cards = buildYTDKPIs();
+  }
+
+  grid.innerHTML = cards.map(c => renderKPICard(c)).join('');
+}
+
+function renderKPICard({ label, value, unit, badge, accent }) {
+  const badgeHtml = badge
+    ? `<div class="kpi-badge ${badge.dir}">${badge.dir === 'up' ? '▲' : badge.dir === 'down' ? '▼' : '—'} ${badge.text}</div>`
+    : '';
+  return `<div class="kpi-card" style="--accent:${accent || '#0064FF'}">
+    <div class="kpi-label">${label}</div>
+    <div class="kpi-value">${value}<span class="kpi-unit">${unit || ''}</span></div>
+    ${badgeHtml}
+  </div>`;
+}
+
+function buildWeeklyKPIs() {
+  const s = dashData.summary || {};
+  const zones = dashData.zones || [];
+  const activeZones = zones.filter(z => z.car_count > 0);
+  const totalCars = activeZones.reduce((a, z) => a + z.car_count, 0);
+  const totalRevenue = activeZones.reduce((a, z) => a + (z.total_revenue || 0), 0);
+  const totalOprDay = activeZones.reduce((a, z) => a + z.car_count, 0); // proxy
+
+  // Weighted averages (weighted by car_count)
+  let wRevCar = 0, wGpCar = 0, wUtil = 0, wCars = 0;
+  for (const z of activeZones) {
+    const c = z.car_count || 0;
+    wRevCar += (z.revenue_per_car_28d || 0) * c;
+    wGpCar  += (z.gp_per_car_28d || 0) * c;
+    wUtil   += (z.utilization_rate || 0) * c;
+    wCars   += c;
+  }
+  const avgRevCar = wCars ? Math.round(wRevCar / wCars) : 0;
+  const avgGpCar  = wCars ? Math.round(wGpCar / wCars) : 0;
+  const avgUtil   = wCars ? (wUtil / wCars).toFixed(1) : 0;
+
+  const resWeekly = s.res_weekly || 0;
+  const accessWeekly = s.access_weekly || 0;
+  const accessGrowth = s.access_growth;
+  const resGrowth = s.res_growth;
+  const carGrowth = s.car_growth;
+
+  return [
+    { label: '총 매출 (28일)', value: fmtRev(totalRevenue), unit: '원', accent: '#0064FF',
+      badge: null },
+    { label: '대당 매출 (28일)', value: fmtRev(avgRevCar), unit: '원', accent: '#0064FF',
+      badge: null },
+    { label: '대당 GP (28일)', value: fmtRev(avgGpCar), unit: '원', accent: '#10b981',
+      badge: null },
+    { label: '평균 가동률', value: avgUtil, unit: '%', accent: '#10b981',
+      badge: null },
+    { label: '주간 앱접속', value: fmtNum(accessWeekly), unit: '건', accent: '#f59e0b',
+      badge: accessGrowth != null ? badge(accessGrowth) : null },
+    { label: '주간 예약', value: fmtNum(resWeekly), unit: '건', accent: '#f59e0b',
+      badge: resGrowth != null ? badge(resGrowth) : null },
+    { label: '차량 수', value: fmtNum(totalCars), unit: '대', accent: '#8b5cf6',
+      badge: carGrowth != null ? badge(carGrowth) : null },
+    { label: '운영 존 수', value: fmtNum(activeZones.length), unit: '개', accent: '#8b5cf6',
+      badge: null },
+  ];
+}
+
+function buildMonthlyKPIs() {
+  const monthly = dashData.monthly || [];
+  if (!monthly.length) return [{
+    label: '월별 데이터 없음', value: '-', unit: '',
+    accent: '#aaa',
+  }];
+  // show info note on first render
+  if (!document.getElementById('monthlyNote')) {
+    const note = document.createElement('div');
+    note.id = 'monthlyNote';
+    note.style.cssText = 'background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:10px 14px;font-size:12px;color:#7a5800;margin-bottom:12px;';
+    note.textContent = '💡 월별/YTD 데이터는 "존/실적 업데이트" 실행 후 생성됩니다. 최초 업데이트 시 약 2~3분 소요됩니다.';
+    document.querySelector('.main').insertBefore(note, document.getElementById('monthlyControls'));
+  }
+  const cur = monthly[monthlyIdx];
+  const prev = monthlyIdx > 0 ? monthly[monthlyIdx - 1] : null;
+
+  return [
+    { label: '총 매출', value: fmtRev(cur.total_revenue), unit: '원', accent: '#0064FF',
+      badge: prev ? badge(pct(cur.total_revenue, prev.total_revenue)) : null },
+    { label: '총 GP', value: fmtRev(cur.total_gp), unit: '원', accent: '#10b981',
+      badge: prev ? badge(pct(cur.total_gp, prev.total_gp)) : null },
+    { label: '대당 매출 (28일)', value: fmtRev(cur.revenue_per_car_28d), unit: '원', accent: '#0064FF',
+      badge: prev ? badge(pct(cur.revenue_per_car_28d, prev.revenue_per_car_28d)) : null },
+    { label: '대당 GP (28일)', value: fmtRev(cur.gp_per_car_28d), unit: '원', accent: '#10b981',
+      badge: prev ? badge(pct(cur.gp_per_car_28d, prev.gp_per_car_28d)) : null },
+    { label: '평균 가동률', value: cur.utilization_rate.toFixed(1), unit: '%', accent: '#10b981',
+      badge: prev ? badge(cur.utilization_rate - prev.utilization_rate, true) : null },
+    { label: '총 예약', value: fmtNum(cur.total_nuse), unit: '건', accent: '#f59e0b',
+      badge: prev ? badge(pct(cur.total_nuse, prev.total_nuse)) : null },
+    { label: '건당 매출', value: fmtRev(cur.revenue_per_res), unit: '원', accent: '#f59e0b',
+      badge: prev ? badge(pct(cur.revenue_per_res, prev.revenue_per_res)) : null },
+    { label: '운영 차량', value: fmtNum(cur.active_cars), unit: '대', accent: '#8b5cf6',
+      badge: prev ? badge(pct(cur.active_cars, prev.active_cars)) : null },
+    { label: '운영 존', value: fmtNum(cur.active_zones), unit: '개', accent: '#8b5cf6',
+      badge: prev ? badge(pct(cur.active_zones, prev.active_zones)) : null },
+  ];
+}
+
+function buildYTDKPIs() {
+  const monthly = dashData.monthly || [];
+  const curYear = new Date().getFullYear().toString();
+  const ytd = monthly.filter(m => m.month.startsWith(curYear));
+  const prevYear = (new Date().getFullYear() - 1).toString();
+  // same months last year
+  const ytdMonths = ytd.map(m => m.month.slice(5)); // '01'...'04'
+  const prevYtd = monthly.filter(m => m.month.startsWith(prevYear) && ytdMonths.includes(m.month.slice(5)));
+
+  const sum = (arr, key) => arr.reduce((a, m) => a + (m[key] || 0), 0);
+  const avgW = (arr, key, w) => {
+    const tot = arr.reduce((a, m) => a + (m[key] || 0) * (m[w] || 1), 0);
+    const ws  = arr.reduce((a, m) => a + (m[w] || 1), 0);
+    return ws ? tot / ws : 0;
+  };
+
+  const totRev  = sum(ytd, 'total_revenue');
+  const totGp   = sum(ytd, 'total_gp');
+  const totNuse = sum(ytd, 'total_nuse');
+  const avgUtil = avgW(ytd, 'utilization_rate', 'active_cars');
+  const avgRevCar = avgW(ytd, 'revenue_per_car_28d', 'active_cars');
+  const avgGpCar  = avgW(ytd, 'gp_per_car_28d', 'active_cars');
+
+  const pRevYoY  = prevYtd.length ? pct(totRev,  sum(prevYtd, 'total_revenue')) : null;
+  const pGpYoY   = prevYtd.length ? pct(totGp,   sum(prevYtd, 'total_gp')) : null;
+  const pNuseYoY = prevYtd.length ? pct(totNuse, sum(prevYtd, 'total_nuse')) : null;
+
+  const lastM = ytd.length ? ytd[ytd.length - 1] : {};
+  return [
+    { label: `${curYear} 누적 매출`, value: fmtRev(totRev), unit: '원', accent: '#0064FF',
+      badge: pRevYoY != null ? badge(pRevYoY) : null },
+    { label: `${curYear} 누적 GP`, value: fmtRev(totGp), unit: '원', accent: '#10b981',
+      badge: pGpYoY != null ? badge(pGpYoY) : null },
+    { label: '평균 대당 매출', value: fmtRev(avgRevCar), unit: '원', accent: '#0064FF',
+      badge: null },
+    { label: '평균 대당 GP', value: fmtRev(avgGpCar), unit: '원', accent: '#10b981',
+      badge: null },
+    { label: '평균 가동률', value: avgUtil.toFixed(1), unit: '%', accent: '#10b981',
+      badge: null },
+    { label: '누적 예약', value: fmtNum(totNuse), unit: '건', accent: '#f59e0b',
+      badge: pNuseYoY != null ? badge(pNuseYoY) : null },
+    { label: '현재 차량', value: fmtNum(lastM.active_cars || 0), unit: '대', accent: '#8b5cf6',
+      badge: null },
+    { label: '현재 존', value: fmtNum(lastM.active_zones || 0), unit: '개', accent: '#8b5cf6',
+      badge: null },
+  ];
+}
+
+/* ─── Charts ─── */
+function renderCharts() {
+  if (chart1) { chart1.destroy(); chart1 = null; }
+  if (chart2) { chart2.destroy(); chart2 = null; }
+
+  if (currentPeriod === 'weekly') {
+    renderWeeklyCharts();
+  } else if (currentPeriod === 'monthly') {
+    renderMonthlyCharts();
+  } else {
+    renderYTDCharts();
+  }
+}
+
+function renderWeeklyCharts() {
+  const s = dashData.summary || {};
+  // supply_demand 팀 전체 trend arrays (8주)
+  // access_trend는 normalized (대비값), 첫 번째 항목은 팀 전체 원시값
+  const accessTrend = (s.access_trend || []).map(v => typeof v === 'number' ? v : 0);
+  const resTrend    = (s.res_trend    || []).map(v => typeof v === 'number' ? v : 0);
+  const carTrend    = (s.car_trend    || []).map(v => typeof v === 'number' ? v : 0);
+  const n = Math.max(accessTrend.length, 1);
+  const labels = Array.from({length: n}, (_, i) => `-${n-1-i}주`);
+  labels[labels.length - 1] = '이번주';
+
+  document.getElementById('chart1Title').textContent = '주간 앱접속 / 예약 추이';
+  document.getElementById('chart2Title').textContent = '주간 차량 수 추이';
+
+  chart1 = new Chart(document.getElementById('chart1'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '앱접속', data: accessTrend, backgroundColor: 'rgba(0,100,255,.25)', borderColor: '#0064FF', borderWidth: 2, borderRadius: 4, yAxisID: 'y' },
+        { label: '예약', data: resTrend, type: 'line', borderColor: '#f59e0b', backgroundColor: 'transparent', pointRadius: 3, tension: .3, yAxisID: 'y2' },
+      ]
+    },
+    options: chartOpts('앱접속', '예약')
+  });
+
+  chart2 = new Chart(document.getElementById('chart2'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: '차량 수', data: carTrend, borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,.1)', fill: true, pointRadius: 3, tension: .3 },
+      ]
+    },
+    options: chartOptsSimple('차량 수')
+  });
+}
+
+function renderMonthlyCharts() {
+  const monthly = dashData.monthly || [];
+  const labels = monthly.map(m => m.month);
+  const rev = monthly.map(m => Math.round((m.revenue_per_car_28d || 0) / 10000));
+  const gp  = monthly.map(m => Math.round((m.gp_per_car_28d || 0) / 10000));
+  const util = monthly.map(m => m.utilization_rate || 0);
+  const nuse = monthly.map(m => m.total_nuse || 0);
+
+  document.getElementById('chart1Title').textContent = '대당 매출 / GP 추이 (만원)';
+  document.getElementById('chart2Title').textContent = '가동률 / 예약 건수 추이';
+
+  chart1 = new Chart(document.getElementById('chart1'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '대당매출(만원)', data: rev, backgroundColor: 'rgba(0,100,255,.3)', borderColor: '#0064FF', borderWidth: 2, borderRadius: 4, yAxisID: 'y' },
+        { label: '대당GP(만원)',  data: gp,  backgroundColor: 'rgba(16,185,129,.3)', borderColor: '#10b981', borderWidth: 2, borderRadius: 4, yAxisID: 'y' },
+      ]
+    },
+    options: chartOptsSimple('만원')
+  });
+
+  chart2 = new Chart(document.getElementById('chart2'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '가동률(%)', data: util, backgroundColor: 'rgba(16,185,129,.3)', borderColor: '#10b981', borderWidth: 2, borderRadius: 4, yAxisID: 'y' },
+        { label: '예약 건수', data: nuse, type: 'line', borderColor: '#f59e0b', backgroundColor: 'transparent', pointRadius: 3, tension: .3, yAxisID: 'y2' },
+      ]
+    },
+    options: chartOpts('가동률(%)', '예약')
+  });
+}
+
+function renderYTDCharts() {
+  const monthly = dashData.monthly || [];
+  const curYear = new Date().getFullYear().toString();
+  const prevYear = (new Date().getFullYear() - 1).toString();
+  const ytd  = monthly.filter(m => m.month.startsWith(curYear));
+  const prev = monthly.filter(m => m.month.startsWith(prevYear));
+
+  const ytdMonths  = ytd.map(m => m.month.slice(5));
+  const labels = ytdMonths.map(m => `${m}월`);
+  const curRev  = ytd.map(m => Math.round(m.total_revenue / 1e8 * 10) / 10);
+  const prevRev = ytdMonths.map(mo => {
+    const p = prev.find(pm => pm.month.slice(5) === mo);
+    return p ? Math.round(p.total_revenue / 1e8 * 10) / 10 : 0;
+  });
+  const curUtil = ytd.map(m => m.utilization_rate || 0);
+
+  document.getElementById('chart1Title').textContent = `${curYear} vs ${prevYear} 월별 매출 (억원)`;
+  document.getElementById('chart2Title').textContent = `${curYear} 월별 가동률 추이`;
+
+  chart1 = new Chart(document.getElementById('chart1'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: `${prevYear}년`, data: prevRev, backgroundColor: 'rgba(200,200,200,.5)', borderColor: '#aaa', borderWidth: 1, borderRadius: 4 },
+        { label: `${curYear}년`, data: curRev,  backgroundColor: 'rgba(0,100,255,.35)', borderColor: '#0064FF', borderWidth: 2, borderRadius: 4 },
+      ]
+    },
+    options: chartOptsSimple('억원')
+  });
+
+  chart2 = new Chart(document.getElementById('chart2'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: '가동률(%)', data: curUtil, borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,.1)', fill: true, pointRadius: 4, tension: .3 },
+      ]
+    },
+    options: chartOptsSimple('%')
+  });
+}
+
+function chartOpts(yLabel, y2Label) {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { font: { size: 11 }, boxWidth: 12 } } },
+    scales: {
+      y:  { position: 'left',  ticks: { font: { size: 10 } }, title: { display: true, text: yLabel, font: { size: 10 } } },
+      y2: { position: 'right', ticks: { font: { size: 10 } }, title: { display: true, text: y2Label, font: { size: 10 } }, grid: { drawOnChartArea: false } },
+    }
+  };
+}
+
+function chartOptsSimple(yLabel) {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { font: { size: 11 }, boxWidth: 12 } } },
+    scales: { y: { ticks: { font: { size: 10 } }, title: { display: true, text: yLabel, font: { size: 10 } } } }
+  };
+}
+
+/* ─── Zone Table ─── */
+function setTableMode(mode, btn) {
+  tableMode = mode;
+  document.querySelectorAll('.table-tabs button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderZoneTable();
+}
+
+function sortTable(key) {
+  if (sortKey === key) sortAsc = !sortAsc;
+  else { sortKey = key; sortAsc = false; }
+  // update header UI
+  document.querySelectorAll('.perf-table th').forEach(th => {
+    th.classList.remove('sorted');
+    th.querySelector('.sort-icon').textContent = '↕';
+  });
+  const ths = document.querySelectorAll('.perf-table th');
+  const keyMap = ['zone_name','region2','car_count','revenue_per_car_28d','gp_per_car_28d','utilization_rate','revenue_per_res','total_revenue'];
+  const idx = keyMap.indexOf(key);
+  if (idx >= 0) {
+    ths[idx].classList.add('sorted');
+    ths[idx].querySelector('.sort-icon').textContent = sortAsc ? '↑' : '↓';
+  }
+  renderZoneTable();
+}
+
+function renderZoneTable() {
+  const zones = dashData ? (dashData.zones || []) : [];
+  // Filter: only zones with profit data (revenue_per_car_28d > 0)
+  let rows = zones.filter(z => z.revenue_per_car_28d > 0 && z.car_count > 0);
+
+  // Sort
+  rows.sort((a, b) => {
+    const av = a[sortKey] ?? 0, bv = b[sortKey] ?? 0;
+    if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortAsc ? av - bv : bv - av;
+  });
+
+  if (tableMode === 'top')    rows = rows.slice(0, 20);
+  else if (tableMode === 'bottom') { rows = rows.slice(-20).reverse(); }
+
+  const maxRev  = Math.max(...rows.map(r => r.revenue_per_car_28d || 0), 1);
+  const maxUtil = Math.max(...rows.map(r => r.utilization_rate || 0), 1);
+
+  const tbody = document.getElementById('zoneTableBody');
+  tbody.innerHTML = rows.map((z, i) => {
+    const rank = tableMode === 'all' ? null : i + 1;
+    const rankClass = rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : 'rank-other';
+    const rankHtml = rank ? `<span class="rank-num ${rankClass}">${rank}</span>` : '';
+    const revBarW = Math.round((z.revenue_per_car_28d || 0) / maxRev * 40);
+    const utilBarW = Math.round((z.utilization_rate || 0) / maxUtil * 40);
+    const gpColor = (z.gp_per_car_28d || 0) > 0 ? '#10b981' : '#f87171';
+    return `<tr>
+      <td><div style="display:flex;align-items:center;">${rankHtml}<span class="zone-name-cell" title="${z.zone_name}">${z.zone_name}</span></div></td>
+      <td><span class="region-badge">${z.region2 || '-'}</span></td>
+      <td>${(z.car_count || 0).toLocaleString()}</td>
+      <td><span class="rev-bar" style="width:${revBarW}px;"></span>${fmtRev(z.revenue_per_car_28d)}</td>
+      <td style="color:${gpColor}">${fmtRev(z.gp_per_car_28d)}</td>
+      <td><span class="util-bar" style="width:${utilBarW}px;"></span>${(z.utilization_rate || 0).toFixed(1)}%</td>
+      <td>${fmtRev(z.revenue_per_res)}</td>
+      <td>${fmtRev(z.total_revenue)}</td>
+    </tr>`;
+  }).join('');
+}
+
+/* ─── Monthly nav ─── */
+function populateMonthSelect() {
+  const monthly = dashData ? (dashData.monthly || []) : [];
+  const sel = document.getElementById('monthSelect');
+  sel.innerHTML = monthly.map((m, i) =>
+    `<option value="${i}" ${i === monthlyIdx ? 'selected' : ''}>${m.month}</option>`
+  ).join('');
+  updateMonthLabel();
+}
+
+function shiftMonth(delta) {
+  const monthly = dashData ? (dashData.monthly || []) : [];
+  monthlyIdx = Math.max(0, Math.min(monthly.length - 1, monthlyIdx + delta));
+  document.getElementById('monthSelect').value = monthlyIdx;
+  updateMonthLabel();
+  renderKPIs();
+}
+
+function selectMonth(val) {
+  monthlyIdx = parseInt(val, 10);
+  updateMonthLabel();
+  renderKPIs();
+}
+
+function updateMonthLabel() {
+  const monthly = dashData ? (dashData.monthly || []) : [];
+  if (!monthly.length) return;
+  const m = monthly[monthlyIdx];
+  if (!m) return;
+  const [y, mo] = m.month.split('-');
+  document.getElementById('selectedMonthLabel').textContent = `${y}년 ${parseInt(mo)}월`;
+}
+
+/* ─── AI Analysis ─── */
+async function runAnalysis() {
+  const apiKey = document.getElementById('aiApiKey').value.trim();
+  const model  = document.getElementById('aiModel').value;
+  const btn = document.getElementById('analyzeBtn');
+  const resultEl = document.getElementById('aiResult');
+
+  if (!apiKey) { alert('API Key를 입력해주세요.'); return; }
+  if (!dashData) { alert('데이터가 로드되지 않았습니다.'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>분석 중...';
+  resultEl.className = 'ai-result show';
+  resultEl.innerHTML = '<span class="ai-thinking">LLM이 실적 데이터를 분석하고 있습니다...</span>';
+
+  const prompt = buildAnalysisPrompt();
+
+  try {
+    const res = await fetch('/api/dashboard-analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey, model, prompt }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    resultEl.textContent = data.result;
+  } catch (e) {
+    resultEl.innerHTML = `<span style="color:#c62828;">분석 실패: ${e.message}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '✦ AI 분석하기';
+  }
+}
+
+function buildAnalysisPrompt() {
+  const s = dashData.summary || {};
+  const monthly = dashData.monthly || [];
+  const zones = (dashData.zones || []).filter(z => z.revenue_per_car_28d > 0 && z.car_count > 0);
+  zones.sort((a, b) => (b.revenue_per_car_28d || 0) - (a.revenue_per_car_28d || 0));
+
+  const top5  = zones.slice(0, 5);
+  const bot5  = zones.slice(-5).reverse();
+
+  let periodInfo = '';
+  if (currentPeriod === 'weekly') {
+    periodInfo = `[분석 기간] 최근 28일 (주간 뷰)
+[팀 전체] 주간 앱접속 ${fmtNum(s.access_weekly)}건 (전주 대비 ${s.access_growth > 0 ? '+' : ''}${s.access_growth}%) / 주간 예약 ${fmtNum(s.res_weekly)}건 (${s.res_growth > 0 ? '+' : ''}${s.res_growth}%) / 차량 ${fmtNum(s.cars)}대 (${s.car_growth > 0 ? '+' : ''}${s.car_growth}%)`;
+  } else if (currentPeriod === 'monthly') {
+    const cur = monthly[monthlyIdx] || {};
+    const prev = monthlyIdx > 0 ? monthly[monthlyIdx - 1] : null;
+    periodInfo = `[분석 기간] ${cur.month} (월별 뷰)
+[이번 달] 총매출 ${fmtRev(cur.total_revenue)}원 / 총GP ${fmtRev(cur.total_gp)}원 / 대당매출 ${fmtRev(cur.revenue_per_car_28d)}원 / 대당GP ${fmtRev(cur.gp_per_car_28d)}원 / 가동률 ${cur.utilization_rate}% / 예약 ${fmtNum(cur.total_nuse)}건 / 운영차량 ${fmtNum(cur.active_cars)}대
+${prev ? `[전월] 총매출 ${fmtRev(prev.total_revenue)}원 / 대당매출 ${fmtRev(prev.revenue_per_car_28d)}원 / 가동률 ${prev.utilization_rate}%` : ''}`;
+  } else {
+    const curYear = new Date().getFullYear().toString();
+    const ytd = monthly.filter(m => m.month.startsWith(curYear));
+    const totRev = ytd.reduce((a, m) => a + m.total_revenue, 0);
+    const totGp  = ytd.reduce((a, m) => a + m.total_gp, 0);
+    const totNuse = ytd.reduce((a, m) => a + m.total_nuse, 0);
+    periodInfo = `[분석 기간] ${curYear} 연초부터 현재 (YTD, ${ytd.length}개월)
+[누적] 총매출 ${fmtRev(totRev)}원 / 총GP ${fmtRev(totGp)}원 / 누적예약 ${fmtNum(totNuse)}건`;
+  }
+
+  const top5Str  = top5.map((z, i) => `  ${i+1}위 ${z.zone_name}(${z.region2}): 대당매출 ${fmtRev(z.revenue_per_car_28d)}원, GP ${fmtRev(z.gp_per_car_28d)}원, 가동률 ${z.utilization_rate}%, ${z.car_count}대`).join('\n');
+  const bot5Str  = bot5.map((z, i) => `  ${i+1}위 ${z.zone_name}(${z.region2}): 대당매출 ${fmtRev(z.revenue_per_car_28d)}원, GP ${fmtRev(z.gp_per_car_28d)}원, 가동률 ${z.utilization_rate}%, ${z.car_count}대`).join('\n');
+
+  return `당신은 SOCAR(쏘카) 카셰어링 경기강원 사업팀의 실적 분석 전문가입니다.
+아래 실적 데이터를 바탕으로 종합 분석을 수행하세요.
+
+${periodInfo}
+
+[우수 존 Top 5 (대당매출 기준)]
+${top5Str || '  데이터 없음'}
+
+[저조 존 Bottom 5 (대당매출 기준)]
+${bot5Str || '  데이터 없음'}
+
+[분석 요청 사항]
+다음 형식으로 분석을 작성하세요:
+
+## 1. 종합 실적 평가
+(전체 실적 수준에 대한 평가, 긍정적/부정적 지표 하이라이트)
+
+## 2. 우수 원인 분석
+(잘 되고 있는 존/지표의 공통점, 성공 요인)
+
+## 3. 저조 원인 분석
+(저조한 존/지표의 공통점, 개선 기회)
+
+## 4. 핵심 액션 아이템
+(즉시 실행 가능한 개선 조치 3가지, 구체적으로)
+
+## 5. 다음 주/월 전망
+(단기 예측 및 주의해야 할 리스크)`;
+}
+
+/* ─── Helpers ─── */
+function fmtRev(v) {
+  if (!v) return '0';
+  const n = Math.abs(v);
+  if (n >= 1e8) return (v / 1e8).toFixed(1) + '억';
+  if (n >= 1e4) return Math.round(v / 1e4).toLocaleString() + '만';
+  return v.toLocaleString();
+}
+
+function fmtNum(v) {
+  if (!v) return '0';
+  if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  return Math.round(v).toLocaleString();
+}
+
+function pct(cur, prev) {
+  if (!prev) return null;
+  return ((cur - prev) / prev * 100).toFixed(1) - 0;
+}
+
+function badge(val, isDiff = false) {
+  if (val === null || val === undefined) return null;
+  const v = isDiff ? val : val;
+  if (v > 0.5)  return { dir: 'up',   text: `+${Math.abs(v).toFixed(1)}${isDiff ? 'pp' : '%'}` };
+  if (v < -0.5) return { dir: 'down', text: `-${Math.abs(v).toFixed(1)}${isDiff ? 'pp' : '%'}` };
+  return { dir: 'neutral', text: `${v > 0 ? '+' : ''}${v.toFixed(1)}${isDiff ? 'pp' : '%'}` };
+}
+
+/* ─── Update ─── */
+async function runUpdate() {
+  const btn = document.getElementById('updateBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ 업데이트 중... (2~5분)';
+  try {
+    const res = await fetch('/api/update-zone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team_id: currentTeam }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    btn.textContent = '✓ 완료! 새로고침 중...';
+    await loadData(currentTeam);
+  } catch (e) {
+    alert(`업데이트 실패: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ 존/실적 업데이트';
+  }
+}
+
+/* ─── Init ─── */
+loadData(currentTeam);
+</script>
+</body>
+</html>
