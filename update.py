@@ -2429,7 +2429,15 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 
 <div class="gap-panel" id="reentryPanel" style="width:400px;">
     <h3>재진입 추천구역</h3>
-    <div style="font-size:11px;color:#8b95a5;margin-bottom:8px;font-weight:500;line-height:1.6;">폐쇄존 중 아래 조건 모두 충족:<br>&middot; 과거 평균 운영대수 1대 이상<br>&middot; 운영 기간 30일 이상<br>&middot; 대당 매출 160만원/28일 이상<br>&middot; 반경 1km 내 월 접속 100건 이상<br>&middot; 반경 300m 내 현재 운영존 없음</div>
+    <div style="font-size:11px;color:#8b95a5;margin-bottom:12px;font-weight:500;">
+        <div style="display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:4px;">
+            <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">운영대수 &ge;1</span>
+            <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">운영 30일+</span>
+            <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">매출 &ge;160만/28일</span>
+            <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">주변접속 &ge;100/월</span>
+            <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">300m 내 운영존 없음</span>
+        </div>
+    </div>
     <div id="reentryRegionFilter" style="margin-bottom:10px;display:flex;align-items:center;gap:6px;{'display:none;' if len(TEAM_CONFIG[team_id]['regions']) <= 1 else ''}">
         <span style="font-size:11px;color:#8b95a5;font-weight:600;">지역</span>
         <select id="reentryRegionSelect" style="padding:6px 12px;border-radius:8px;border:1px solid #e8eaed;background:#fff;color:#1a1a1a;font-size:12px;font-weight:600;">
@@ -2886,16 +2894,21 @@ reentryData.forEach(function(z) {{
         radius: Math.max(8, Math.min(20, 6 + Math.log10(demand + 1) * 3)),
         fillColor: '#ec407a', color: '#c2185b', weight: 2, opacity: 0.9, fillOpacity: 0.5
     }}).bindPopup(
-        '<div class="popup-title">' + z.zone_name + '</div>' +
-        '<div class="popup-row"><span class="popup-label">주차장</span>' + z.parking_name + '</div>' +
-        '<div class="popup-row"><span class="popup-label">주소</span>' + z.address + '</div>' +
-        '<div class="popup-row"><span class="popup-label">주변접속/월</span><b>' + (z.nearby_access||0).toLocaleString() + '</b></div>' +
-        '<div class="popup-row"><span class="popup-label">주변예약/월</span><b>' + (z.nearby_res||0).toLocaleString() + '</b></div>' +
-        '<div class="popup-row"><span class="popup-label">과거운영대수</span><b>' + z.hist_car_count + '</b></div>' +
-        '<div class="popup-row"><span class="popup-label">운영일수</span><b>' + z.operation_days + '일</b></div>' +
-        '<div class="popup-row"><span class="popup-label">운영기간</span>' + z.first_date + ' ~ ' + z.last_date + '</div>' +
-        '<div class="popup-row"><span class="popup-label">가동률</span><b>' + z.utilization_rate + '%</b></div>' +
-        '<div class="popup-row"><span class="popup-label">매출/대(28일)</span><b>' + (z.revenue_per_car_28d||0).toLocaleString() + '원</b></div>'
+        '<div class="popup-title">' + z.zone_name + ' <span class="popup-badge" style="background:#ec407a">재진입 추천</span></div>' +
+        '<div class="popup-row"><span class="popup-label">주차장</span><span>' + z.parking_name + '</span></div>' +
+        '<div class="popup-row"><span class="popup-label">주소</span><span>' + z.address + '</span></div>' +
+        '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>' +
+        '<div style="font-size:10px;color:#8b95a5;font-weight:700;margin-bottom:4px;">주변 수요</div>' +
+        '<div class="popup-row"><span class="popup-label">접속/월</span><span><b style="color:#0064FF">' + (z.nearby_access||0).toLocaleString() + '</b></span></div>' +
+        '<div class="popup-row"><span class="popup-label">예약/월</span><span><b style="color:#0064FF">' + (z.nearby_res||0).toLocaleString() + '</b></span></div>' +
+        '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>' +
+        '<div style="font-size:10px;color:#8b95a5;font-weight:700;margin-bottom:4px;">과거 운영 실적</div>' +
+        '<div class="popup-row"><span class="popup-label">운영대수</span><span><b>' + z.hist_car_count + '</b>대</span></div>' +
+        '<div class="popup-row"><span class="popup-label">운영기간</span><span>' + z.first_date + ' ~ ' + z.last_date + '</span></div>' +
+        '<div class="popup-row"><span class="popup-label">운영일수</span><span><b>' + z.operation_days + '</b>일</span></div>' +
+        '<div class="popup-row"><span class="popup-label">가동률</span><span><b>' + z.utilization_rate + '</b>%</span></div>' +
+        '<div class="popup-row"><span class="popup-label">대당 매출</span><span><b style="color:#0064FF">' + (z.revenue_per_car_28d||0).toLocaleString() + '</b>원/28일</span></div>' +
+        '<div class="popup-row"><span class="popup-label">대당 GP</span><span><b>' + (z.gp_per_car_28d||0).toLocaleString() + '</b>원/28일</span></div>'
     ).addTo(reentryLayer);
 }});
 
