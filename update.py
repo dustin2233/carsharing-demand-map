@@ -1294,10 +1294,14 @@ def query_dashboard_metrics(team_id='gyeonggi'):
         SUM(r.revenue)                            AS w_revenue,
         SUM(r.__rev_rent)                         AS w_price,
         SUM(r.__rev_rent_discount)                AS w_discount,
-        COUNTIF(r.utime < 60)                     AS w_utime_u1h,
-        COUNTIF(r.utime >= 60  AND r.utime < 240) AS w_utime_1to4h,
-        COUNTIF(r.utime >= 240 AND r.utime < 720) AS w_utime_4to12h,
-        COUNTIF(r.utime >= 720)                   AS w_utime_o12h
+        COUNTIF(r.utime < 240)                      AS w_u_0to4h,
+        COUNTIF(r.utime >= 240 AND r.utime < 480)   AS w_u_4to8h,
+        COUNTIF(r.utime >= 480 AND r.utime < 1440)  AS w_u_8to24h,
+        COUNTIF(r.utime >= 1440)                    AS w_u_24plus,
+        SUM(IF(r.utime < 240,                    r.revenue, 0)) AS w_u_0to4h_rev,
+        SUM(IF(r.utime >= 240 AND r.utime < 480, r.revenue, 0)) AS w_u_4to8h_rev,
+        SUM(IF(r.utime >= 480 AND r.utime < 1440,r.revenue, 0)) AS w_u_8to24h_rev,
+        SUM(IF(r.utime >= 1440,                  r.revenue, 0)) AS w_u_24plus_rev
       FROM `socar-data.socar_biz_profit.profit_socar_reservation` r
       INNER JOIN `socar-data.socar_zone.zone` z ON r.zone_id = z.legacy_zone_id
       WHERE {z_region}
@@ -1329,11 +1333,15 @@ def query_dashboard_metrics(team_id='gyeonggi'):
                     NULLIF(SUM(IF(way_type='부름', w_count, 0)),0))   AS d2d_rev_per_use,
         SAFE_DIVIDE(SUM(IF(way_type='부름', w_utime, 0)),
                     NULLIF(SUM(IF(way_type='부름', w_count, 0)),0)) / 60.0 AS d2d_avg_hours,
-        -- utime 구간별 건수 (전체 way_type 합산)
-        SUM(IF(w_utime_u1h   IS NOT NULL, w_utime_u1h,   0))  AS u_under1h,
-        SUM(IF(w_utime_1to4h IS NOT NULL, w_utime_1to4h, 0))  AS u_1to4h,
-        SUM(IF(w_utime_4to12h IS NOT NULL,w_utime_4to12h,0))  AS u_4to12h,
-        SUM(IF(w_utime_o12h  IS NOT NULL, w_utime_o12h,  0))  AS u_over12h
+        -- utime 구간별 건수·매출 (전체 way_type 합산)
+        SUM(w_u_0to4h)      AS u_0to4h,
+        SUM(w_u_4to8h)      AS u_4to8h,
+        SUM(w_u_8to24h)     AS u_8to24h,
+        SUM(w_u_24plus)     AS u_24plus,
+        SUM(w_u_0to4h_rev)  AS u_0to4h_rev,
+        SUM(w_u_4to8h_rev)  AS u_4to8h_rev,
+        SUM(w_u_8to24h_rev) AS u_8to24h_rev,
+        SUM(w_u_24plus_rev) AS u_24plus_rev
       FROM way GROUP BY 1, 2
     ),
     payment AS (
@@ -1393,10 +1401,14 @@ def query_dashboard_metrics(team_id='gyeonggi'):
       wp.oneway_count,  wp.oneway_rev_per_use, wp.oneway_avg_hours,
       wp.d2d_count,     wp.d2d_rev_per_use,    wp.d2d_avg_hours,
       u.opr_weekday, u.opr_weekend,
-      IFNULL(wp.u_under1h, 0)  AS u_under1h,
-      IFNULL(wp.u_1to4h,   0)  AS u_1to4h,
-      IFNULL(wp.u_4to12h,  0)  AS u_4to12h,
-      IFNULL(wp.u_over12h, 0)  AS u_over12h,
+      IFNULL(wp.u_0to4h,      0) AS u_0to4h,
+      IFNULL(wp.u_4to8h,      0) AS u_4to8h,
+      IFNULL(wp.u_8to24h,     0) AS u_8to24h,
+      IFNULL(wp.u_24plus,     0) AS u_24plus,
+      IFNULL(wp.u_0to4h_rev,  0) AS u_0to4h_rev,
+      IFNULL(wp.u_4to8h_rev,  0) AS u_4to8h_rev,
+      IFNULL(wp.u_8to24h_rev, 0) AS u_8to24h_rev,
+      IFNULL(wp.u_24plus_rev, 0) AS u_24plus_rev,
       IFNULL(pay.payment_attempt, 0) AS payment_attempt
     FROM profit p
     LEFT JOIN demand    d   ON p.isoyear = d.isoyear   AND p.isoweek = d.isoweek
@@ -1437,10 +1449,14 @@ def query_dashboard_metrics(team_id='gyeonggi'):
             'd2d_avg_hours':     round(float(r.get('d2d_avg_hours') or 0), 2),
             'opr_weekday':       round(float(r.get('opr_weekday') or 0), 4),
             'opr_weekend':       round(float(r.get('opr_weekend') or 0), 4),
-            'u_under1h':         int(float(r.get('u_under1h') or 0)),
-            'u_1to4h':           int(float(r.get('u_1to4h') or 0)),
-            'u_4to12h':          int(float(r.get('u_4to12h') or 0)),
-            'u_over12h':         int(float(r.get('u_over12h') or 0)),
+            'u_0to4h':           int(float(r.get('u_0to4h') or 0)),
+            'u_4to8h':           int(float(r.get('u_4to8h') or 0)),
+            'u_8to24h':          int(float(r.get('u_8to24h') or 0)),
+            'u_24plus':          int(float(r.get('u_24plus') or 0)),
+            'u_0to4h_rev':       int(float(r.get('u_0to4h_rev') or 0)),
+            'u_4to8h_rev':       int(float(r.get('u_4to8h_rev') or 0)),
+            'u_8to24h_rev':      int(float(r.get('u_8to24h_rev') or 0)),
+            'u_24plus_rev':      int(float(r.get('u_24plus_rev') or 0)),
             'payment_attempt':   int(float(r.get('payment_attempt') or 0)),
         })
     return {'weekly': weekly, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M')}
@@ -1526,10 +1542,14 @@ def query_dashboard_by_region(team_id='gyeonggi', region_level='region2'):
         SUM(r.revenue)             AS w_revenue,
         SUM(r.__rev_rent)          AS w_price,
         SUM(r.__rev_rent_discount) AS w_discount,
-        COUNTIF(r.utime < 60)                     AS w_utime_u1h,
-        COUNTIF(r.utime >= 60  AND r.utime < 240) AS w_utime_1to4h,
-        COUNTIF(r.utime >= 240 AND r.utime < 720) AS w_utime_4to12h,
-        COUNTIF(r.utime >= 720)                   AS w_utime_o12h
+        COUNTIF(r.utime < 240)                      AS w_u_0to4h,
+        COUNTIF(r.utime >= 240 AND r.utime < 480)   AS w_u_4to8h,
+        COUNTIF(r.utime >= 480 AND r.utime < 1440)  AS w_u_8to24h,
+        COUNTIF(r.utime >= 1440)                    AS w_u_24plus,
+        SUM(IF(r.utime < 240,                    r.revenue, 0)) AS w_u_0to4h_rev,
+        SUM(IF(r.utime >= 240 AND r.utime < 480, r.revenue, 0)) AS w_u_4to8h_rev,
+        SUM(IF(r.utime >= 480 AND r.utime < 1440,r.revenue, 0)) AS w_u_8to24h_rev,
+        SUM(IF(r.utime >= 1440,                  r.revenue, 0)) AS w_u_24plus_rev
       FROM `socar-data.socar_biz_profit.profit_socar_reservation` r
       INNER JOIN `socar-data.socar_zone.zone` z ON r.zone_id = z.legacy_zone_id
       INNER JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
@@ -1562,10 +1582,14 @@ def query_dashboard_by_region(team_id='gyeonggi', region_level='region2'):
                     NULLIF(SUM(IF(way_type='부름', w_count, 0)),0))           AS d2d_rev_per_use,
         SAFE_DIVIDE(SUM(IF(way_type='부름', w_utime, 0)),
                     NULLIF(SUM(IF(way_type='부름', w_count, 0)),0)) / 60.0   AS d2d_avg_hours,
-        SUM(IF(w_utime_u1h   IS NOT NULL, w_utime_u1h,   0))                AS u_under1h,
-        SUM(IF(w_utime_1to4h IS NOT NULL, w_utime_1to4h, 0))                AS u_1to4h,
-        SUM(IF(w_utime_4to12h IS NOT NULL,w_utime_4to12h,0))                AS u_4to12h,
-        SUM(IF(w_utime_o12h  IS NOT NULL, w_utime_o12h,  0))                AS u_over12h
+        SUM(w_u_0to4h)      AS u_0to4h,
+        SUM(w_u_4to8h)      AS u_4to8h,
+        SUM(w_u_8to24h)     AS u_8to24h,
+        SUM(w_u_24plus)     AS u_24plus,
+        SUM(w_u_0to4h_rev)  AS u_0to4h_rev,
+        SUM(w_u_4to8h_rev)  AS u_4to8h_rev,
+        SUM(w_u_8to24h_rev) AS u_8to24h_rev,
+        SUM(w_u_24plus_rev) AS u_24plus_rev
       FROM way_raw GROUP BY 1, 2, 3, 4, 5
     ),
     payment AS (
@@ -1626,12 +1650,16 @@ def query_dashboard_by_region(team_id='gyeonggi', region_level='region2'):
       IFNULL(w.d2d_count, 0)      AS d2d_count,
       IFNULL(w.d2d_rev_per_use, 0)   AS d2d_rev_per_use,
       IFNULL(w.d2d_avg_hours, 0)     AS d2d_avg_hours,
-      IFNULL(d.attempt, 0)        AS attempt,
-      IFNULL(d.fail_rate, 0)      AS fail_rate,
-      IFNULL(w.u_under1h, 0)     AS u_under1h,
-      IFNULL(w.u_1to4h, 0)       AS u_1to4h,
-      IFNULL(w.u_4to12h, 0)      AS u_4to12h,
-      IFNULL(w.u_over12h, 0)     AS u_over12h,
+      IFNULL(d.attempt, 0)           AS attempt,
+      IFNULL(d.fail_rate, 0)         AS fail_rate,
+      IFNULL(w.u_0to4h,      0)     AS u_0to4h,
+      IFNULL(w.u_4to8h,      0)     AS u_4to8h,
+      IFNULL(w.u_8to24h,     0)     AS u_8to24h,
+      IFNULL(w.u_24plus,     0)     AS u_24plus,
+      IFNULL(w.u_0to4h_rev,  0)     AS u_0to4h_rev,
+      IFNULL(w.u_4to8h_rev,  0)     AS u_4to8h_rev,
+      IFNULL(w.u_8to24h_rev, 0)     AS u_8to24h_rev,
+      IFNULL(w.u_24plus_rev, 0)     AS u_24plus_rev,
       IFNULL(pay.payment_attempt, 0) AS payment_attempt
     FROM perf p
     LEFT JOIN util u USING (region1, region2_parent, region, isoyear, isoweek)
@@ -1676,10 +1704,14 @@ def query_dashboard_by_region(team_id='gyeonggi', region_level='region2'):
             'd2d_avg_hours':   round(float(r.get('d2d_avg_hours') or 0), 1),
             'attempt':         int(float(r.get('attempt') or 0)),
             'fail_rate':       round(float(r.get('fail_rate') or 0), 4),
-            'u_under1h':       int(float(r.get('u_under1h') or 0)),
-            'u_1to4h':         int(float(r.get('u_1to4h') or 0)),
-            'u_4to12h':        int(float(r.get('u_4to12h') or 0)),
-            'u_over12h':       int(float(r.get('u_over12h') or 0)),
+            'u_0to4h':         int(float(r.get('u_0to4h') or 0)),
+            'u_4to8h':         int(float(r.get('u_4to8h') or 0)),
+            'u_8to24h':        int(float(r.get('u_8to24h') or 0)),
+            'u_24plus':        int(float(r.get('u_24plus') or 0)),
+            'u_0to4h_rev':     int(float(r.get('u_0to4h_rev') or 0)),
+            'u_4to8h_rev':     int(float(r.get('u_4to8h_rev') or 0)),
+            'u_8to24h_rev':    int(float(r.get('u_8to24h_rev') or 0)),
+            'u_24plus_rev':    int(float(r.get('u_24plus_rev') or 0)),
             'payment_attempt': int(float(r.get('payment_attempt') or 0)),
         })
     return {'weekly': weekly, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M')}
@@ -3323,7 +3355,7 @@ gapsData.forEach(function(g) {{
         fillColor: '#e74c3c', color: '#c0392b', weight: 1.5, opacity: 0.7, fillOpacity: 0.12
     }}).bindPopup(
         '<div class="popup-title">' + (g.name || '(' + g.lat + ', ' + g.lng + ')') + '</div>' +
-        '<div style="font-size:10px;color:#8b95a5;margin-bottom:4px;">반경 500m 내 수요 (월평균)</div>' +
+        '<div style="font-size:10px;color:#8b95a5;margin-bottom:4px;">반경 500m 내 수요 · 월평균 · ' + '{THREE_MONTHS_AGO}~{TODAY}' + '</div>' +
         '<div class="popup-row"><span class="popup-label">접속</span><b style="color:#0064FF">' + (g.access_count || 0).toLocaleString() + '</b></div>' +
         '<div class="popup-row"><span class="popup-label">예약 생성</span><b style="color:#0064FF">' + (g.reservation_count || 0).toLocaleString() + '</b></div>' +
         '<div class="popup-row"><span class="popup-label">최근접 존</span><b>' + (g.nearest_zone_km || '-') + 'km</b></div>'

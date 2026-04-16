@@ -218,12 +218,13 @@ body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-s
 .wt-lbl { font-size:11px; color:#6b7280; flex-shrink:0; width:80px; }
 .wt-val { font-size:13px; font-weight:700; color:#111827; }
 .wt-chg { font-size:10px; display:flex; gap:4px; flex-wrap:wrap; }
-.ut-legend { display:flex; flex-direction:column; gap:6px; }
-.ut-slice { display:flex; align-items:center; gap:6px; font-size:12px; }
+.ut-legend { display:flex; flex-direction:column; gap:8px; }
+.ut-slice { display:grid; grid-template-columns:12px 52px 36px 52px auto; align-items:center; gap:6px; font-size:12px; }
 .ut-dot { width:10px; height:10px; border-radius:2px; flex-shrink:0; }
-.ut-label { color:#374151; min-width:60px; }
+.ut-label { color:#374151; font-weight:600; }
 .ut-pct { font-weight:700; color:#111827; }
-.ut-cnt { color:#9ca3af; font-size:11px; }
+.ut-cnt { color:#6b7280; font-size:11px; }
+.ut-rpu { color:#9ca3af; font-size:10px; }
 
 /* ─── No data ─── */
 .no-data { background:#fff; border-radius:10px; padding:40px; text-align:center;
@@ -493,7 +494,8 @@ function aggregateByWeek(rows) {
         d2d_count:0, _d2d_rev:0, _d2d_utime:0,
         attempt:0, _fail_cnt:0,
         _opr_wd_w:0, _opr_wd_n:0, _opr_we_w:0, _opr_we_n:0,
-        u_under1h:0, u_1to4h:0, u_4to12h:0, u_over12h:0,
+        u_0to4h:0, u_4to8h:0, u_8to24h:0, u_24plus:0,
+        u_0to4h_rev:0, u_4to8h_rev:0, u_8to24h_rev:0, u_24plus_rev:0,
         payment_attempt:0,
       };
     }
@@ -523,11 +525,15 @@ function aggregateByWeek(rows) {
     m.attempt          += att;
     m._fail_cnt        += att * (r.fail_rate || 0);
     m.payment_attempt  += r.payment_attempt || 0;
-    // utime 구간별 건수
-    m.u_under1h += r.u_under1h || 0;
-    m.u_1to4h   += r.u_1to4h   || 0;
-    m.u_4to12h  += r.u_4to12h  || 0;
-    m.u_over12h += r.u_over12h || 0;
+    // utime 구간별 건수·매출
+    m.u_0to4h     += r.u_0to4h     || 0;
+    m.u_4to8h     += r.u_4to8h     || 0;
+    m.u_8to24h    += r.u_8to24h    || 0;
+    m.u_24plus    += r.u_24plus    || 0;
+    m.u_0to4h_rev += r.u_0to4h_rev || 0;
+    m.u_4to8h_rev += r.u_4to8h_rev || 0;
+    m.u_8to24h_rev+= r.u_8to24h_rev|| 0;
+    m.u_24plus_rev+= r.u_24plus_rev|| 0;
     // 가동률 — car_count 가중 평균
     m._opr_wd_w += (r.opr_weekday || 0) * cc;  m._opr_wd_n += cc;
     m._opr_we_w += (r.opr_weekend || 0) * cc;  m._opr_we_n += cc;
@@ -583,7 +589,9 @@ function getDatasets() {
 
 const SUM_KEYS = ['revenue','profit','use_count','attempt',
   'round_count','oneway_count','d2d_count',
-  'u_under1h','u_1to4h','u_4to12h','u_over12h','payment_attempt'];
+  'u_0to4h','u_4to8h','u_8to24h','u_24plus',
+  'u_0to4h_rev','u_4to8h_rev','u_8to24h_rev','u_24plus_rev',
+  'payment_attempt'];
 const AVG_KEYS = ['rev_per_car','gpm','opr_weekday','opr_weekend','fail_rate',
   'discount_rate','round_rev_per_use','round_avg_hours',
   'oneway_rev_per_use','oneway_avg_hours','d2d_rev_per_use','d2d_avg_hours','car_count'];
@@ -1039,9 +1047,10 @@ function renderWaytype(ds) {
 
   const W1 = ds.now.at(-1), W2 = ds.now.at(-2), Y1 = ds.yoy.at(-1);
 
-  // utime bucket 도넛 데이터
-  const utBuckets = ['u_under1h','u_1to4h','u_4to12h','u_over12h'];
-  const utLabels  = ['1h 미만','1~4h','4~12h','12h 이상'];
+  // utime bucket 데이터
+  const utBuckets = ['u_0to4h','u_4to8h','u_8to24h','u_24plus'];
+  const utRevKeys = ['u_0to4h_rev','u_4to8h_rev','u_8to24h_rev','u_24plus_rev'];
+  const utLabels  = ['0~4h','4~8h','8~24h','24h+'];
   const utColors  = ['#bfdbfe','#60a5fa','#2563eb','#1e3a8a'];
   const utTotal   = utBuckets.reduce((s,k) => s + (W1?.[k]||0), 0);
 
@@ -1072,103 +1081,149 @@ function renderWaytype(ds) {
     </div>`;
   }).join('');
 
-  // 이용 구간 파이
+  // 이용 구간 도넛 슬라이스 (W-1 기준)
   const pieSlices = utTotal > 0 ? utBuckets.map((k,i) => {
-    const v = W1?.[k] || 0;
+    const v   = W1?.[k] || 0;
+    const rev = W1?.[utRevKeys[i]] || 0;
+    const rpu = v > 0 ? Math.round(rev / v) : 0;
     const pct = (v / utTotal * 100).toFixed(1);
     return `<div class="ut-slice">
       <span class="ut-dot" style="background:${utColors[i]}"></span>
       <span class="ut-label">${utLabels[i]}</span>
       <span class="ut-pct">${pct}%</span>
-      <span class="ut-cnt">(${fmt(v,'cnt')}건)</span>
+      <span class="ut-cnt">${fmt(v,'cnt')}건</span>
+      <span class="ut-rpu" style="color:#6b7280;font-size:10px">${fmt(rpu,'krw')}원/건</span>
     </div>`;
   }).join('') : '<div style="color:#9ca3af;font-size:12px">데이터 없음</div>';
-
-  // 시계열 차트 카드
-  const chartCards = [
-    { id:'wt_count_ch', label:'이용건수 추이', keys: ways.map(w=>w.count), colors: ways.map(w=>w.color), labels: ways.map(w=>w.label), fmt:'cnt' },
-    { id:'wt_rev_ch',   label:'건당매출 추이 (원)', keys: ways.map(w=>w.rev), colors: ways.map(w=>w.color), labels: ways.map(w=>w.label), fmt:'krw' },
-  ].map(c => `<div class="chart-card">
-    <div class="chart-hdr"><div class="chart-dot" style="background:${c.colors[0]}"></div>${c.label}</div>
-    <div class="chart-wrap"><canvas id="${c.id}"></canvas></div>
-  </div>`).join('');
 
   return `
     <div class="metric-section">
       <div class="wt-grid">${wayCols}</div>
     </div>
     <div class="metric-section">
-      <div class="chart-card" style="margin-bottom:12px">
-        <div class="chart-hdr">⏱ 이용 구간 분포 (W-1)</div>
-        <div style="display:flex;align-items:center;gap:24px;padding:12px 14px">
-          <canvas id="ut_pie_ch" width="120" height="120" style="flex-shrink:0"></canvas>
+      <div class="chart-grid cols2" style="margin-bottom:12px">
+        <div class="chart-card">
+          <div class="chart-hdr">⏱ 이용 구간별 건수 추이</div>
+          <div class="chart-wrap"><canvas id="wt_count_ch"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-hdr">💰 이용 구간별 건당매출 추이 (원)</div>
+          <div class="chart-wrap"><canvas id="wt_rev_ch"></canvas></div>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-hdr">⏱ 이용 구간 분포 (W-1 기준)</div>
+        <div style="display:flex;align-items:center;gap:32px;padding:12px 14px">
+          <canvas id="ut_pie_ch" width="130" height="130" style="flex-shrink:0"></canvas>
           <div class="ut-legend">${pieSlices}</div>
         </div>
       </div>
-      <div class="chart-grid cols2">${chartCards}</div>
+      <div class="chart-grid cols2" style="margin-top:12px">
+        <div class="chart-card">
+          <div class="chart-hdr">📊 Way Type 이용건수 추이</div>
+          <div class="chart-wrap"><canvas id="wt_way_count_ch"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-hdr">💳 Way Type 건당매출 추이 (원)</div>
+          <div class="chart-wrap"><canvas id="wt_way_rev_ch"></canvas></div>
+        </div>
+      </div>
     </div>`;
 }
 
 function renderWaytypeCharts(ds) {
-  const ways = [
-    { key:'round',  label:'왕복', color:'#0064FF', count:'round_count', rev:'round_rev_per_use' },
-    { key:'oneway', label:'편도', color:'#8b5cf6', count:'oneway_count', rev:'oneway_rev_per_use' },
-    { key:'d2d',    label:'부름', color:'#ec4899', count:'d2d_count',   rev:'d2d_rev_per_use' },
-  ];
   const nows = ds.now;
+  const lbls = nows.map(w => `W${w.isoweek}`);
 
-  // 이용건수 + 건당매출 차트
-  [
-    { id:'wt_count_ch', key: w => w.count, fmt:'cnt' },
-    { id:'wt_rev_ch',   key: w => w.rev,   fmt:'krw' },
-  ].forEach(cfg => {
-    const ctx = document.getElementById(cfg.id);
+  // ── 공통 선 차트 생성 헬퍼 ──
+  function makeLineChart(id, datasets, fmt) {
+    const ctx = document.getElementById(id);
     if (!ctx) return;
-    const instance = new Chart(ctx, {
-      type:'bar',
-      data: {
-        labels: nows.map(w => `W${w.isoweek}`),
-        datasets: ways.map(w => ({
-          label: w.label,
-          data: nows.map(r => r[cfg.key(w)] ?? null),
-          backgroundColor: w.color + 'cc',
-          borderColor: w.color,
-          borderWidth: 1,
-          borderRadius: 4,
-        })),
-      },
+    const inst = new Chart(ctx, {
+      type: 'line',
+      data: { labels: lbls, datasets },
       options: {
         responsive: true, maintainAspectRatio: false,
+        layout: { padding: { top: 20 } },
         plugins: {
-          legend: { labels: { font:{size:10}, boxWidth:10 } },
-          datalabels: { display: false },
+          legend: { labels: { font:{size:10}, boxWidth:10, usePointStyle:true } },
+          datalabels: {
+            anchor:'top', align:'top', offset:2,
+            font:{ size:8, weight:'bold' },
+            color: ctx => datasets[ctx.datasetIndex]?.borderColor,
+            formatter: v => v == null ? '' : fmtAxis(v, fmt),
+          },
         },
         scales: {
           x: { ticks:{font:{size:10}} },
-          y: { ticks:{ font:{size:10}, callback: v => fmtAxis(v, cfg.fmt) } },
+          y: { ticks:{ font:{size:10}, callback: v => fmtAxis(v, fmt) } },
         },
       },
     });
-    charts.push(instance);
-  });
+    charts.push(inst);
+  }
 
-  // utime 도넛 차트
+  // ── 이용 구간별 건수 추이 ──
+  const utCountKeys = ['u_0to4h','u_4to8h','u_8to24h','u_24plus'];
+  const utRevKeys   = ['u_0to4h_rev','u_4to8h_rev','u_8to24h_rev','u_24plus_rev'];
+  const utLabels    = ['0~4h','4~8h','8~24h','24h+'];
+  const utColors    = ['#60a5fa','#2563eb','#7c3aed','#1e3a8a'];
+
+  makeLineChart('wt_count_ch',
+    utCountKeys.map((k,i) => ({
+      label: utLabels[i],
+      data: nows.map(r => r[k] ?? null),
+      borderColor: utColors[i], backgroundColor: utColors[i]+'18',
+      fill: false, tension:.25, pointRadius:4, pointHoverRadius:6, borderWidth:2.5,
+    })), 'cnt');
+
+  // ── 이용 구간별 건당매출 추이 ──
+  makeLineChart('wt_rev_ch',
+    utCountKeys.map((k,i) => ({
+      label: utLabels[i],
+      data: nows.map(r => {
+        const cnt = r[k] || 0;
+        const rev = r[utRevKeys[i]] || 0;
+        return cnt > 0 ? Math.round(rev / cnt) : null;
+      }),
+      borderColor: utColors[i], backgroundColor: utColors[i]+'18',
+      fill: false, tension:.25, pointRadius:4, pointHoverRadius:6, borderWidth:2.5,
+    })), 'krw');
+
+  // ── Way Type 이용건수 추이 ──
+  const ways = [
+    { label:'왕복', color:'#0064FF', count:'round_count',  rev:'round_rev_per_use' },
+    { label:'편도', color:'#8b5cf6', count:'oneway_count', rev:'oneway_rev_per_use' },
+    { label:'부름', color:'#ec4899', count:'d2d_count',    rev:'d2d_rev_per_use' },
+  ];
+  makeLineChart('wt_way_count_ch',
+    ways.map(w => ({
+      label: w.label, data: nows.map(r => r[w.count] ?? null),
+      borderColor: w.color, backgroundColor: w.color+'18',
+      fill: false, tension:.25, pointRadius:4, pointHoverRadius:6, borderWidth:2.5,
+    })), 'cnt');
+
+  makeLineChart('wt_way_rev_ch',
+    ways.map(w => ({
+      label: w.label, data: nows.map(r => r[w.rev] ?? null),
+      borderColor: w.color, backgroundColor: w.color+'18',
+      fill: false, tension:.25, pointRadius:4, pointHoverRadius:6, borderWidth:2.5,
+    })), 'krw');
+
+  // ── 이용 구간 도넛 차트 ──
   const pieCtx = document.getElementById('ut_pie_ch');
-  if (pieCtx && ds.now.length) {
-    const W1 = ds.now.at(-1);
-    const keys = ['u_under1h','u_1to4h','u_4to12h','u_over12h'];
-    const lbls = ['1h 미만','1~4h','4~12h','12h+'];
-    const colors = ['#bfdbfe','#60a5fa','#2563eb','#1e3a8a'];
-    const data = keys.map(k => W1?.[k] || 0);
-    const instance = new Chart(pieCtx, {
-      type:'doughnut',
-      data: { labels: lbls, datasets:[{ data, backgroundColor: colors, borderWidth:1 }] },
+  if (pieCtx && nows.length) {
+    const W1 = nows.at(-1);
+    const data = utCountKeys.map(k => W1?.[k] || 0);
+    const inst = new Chart(pieCtx, {
+      type: 'doughnut',
+      data: { labels: utLabels, datasets:[{ data, backgroundColor: utColors, borderWidth:1 }] },
       options: {
         responsive: false,
         plugins: { legend:{display:false}, datalabels:{display:false} },
       },
     });
-    charts.push(instance);
+    charts.push(inst);
   }
 }
 

@@ -21,3 +21,7 @@
 127.0.0.1 - - [16/Apr/2026 14:15:03] "GET /api/status HTTP/1.1" 200 -
 127.0.0.1 - - [16/Apr/2026 14:16:31] "GET /api/ai-config HTTP/1.1" 200 -
 127.0.0.1 - - [16/Apr/2026 14:16:31] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [16/Apr/2026 14:26:32] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [16/Apr/2026 14:26:41] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [16/Apr/2026 14:27:54] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [16/Apr/2026 14:27:54] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
