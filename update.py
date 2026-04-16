@@ -3349,17 +3349,21 @@ dtodData.forEach(function(d) {{
 }});
 
 var gapLayer = L.layerGroup();
+var gapPopup = function(g) {{
+    return '<div class="popup-title">' + (g.name || '(' + g.lat + ', ' + g.lng + ')') + '</div>' +
+        '<div style="font-size:10px;color:#8b95a5;margin-bottom:4px;">반경 500m 내 수요 · 월평균 · ' + '{THREE_MONTHS_AGO}~{TODAY}' + '</div>' +
+        '<div class="popup-row"><span class="popup-label">접속</span><b style="color:#0064FF">' + (g.access_count || 0).toLocaleString() + '</b></div>' +
+        '<div class="popup-row"><span class="popup-label">예약 생성</span><b style="color:#0064FF">' + (g.reservation_count || 0).toLocaleString() + '</b></div>' +
+        '<div class="popup-row"><span class="popup-label">최근접 존</span><b>' + (g.nearest_zone_km || '-') + 'km</b></div>';
+}};
 gapsData.forEach(function(g) {{
     L.circle([g.lat, g.lng], {{
         radius: 500,
         fillColor: '#e74c3c', color: '#c0392b', weight: 1.5, opacity: 0.7, fillOpacity: 0.12
-    }}).bindPopup(
-        '<div class="popup-title">' + (g.name || '(' + g.lat + ', ' + g.lng + ')') + '</div>' +
-        '<div style="font-size:10px;color:#8b95a5;margin-bottom:4px;">반경 500m 내 수요 · 월평균 · ' + '{THREE_MONTHS_AGO}~{TODAY}' + '</div>' +
-        '<div class="popup-row"><span class="popup-label">접속</span><b style="color:#0064FF">' + (g.access_count || 0).toLocaleString() + '</b></div>' +
-        '<div class="popup-row"><span class="popup-label">예약 생성</span><b style="color:#0064FF">' + (g.reservation_count || 0).toLocaleString() + '</b></div>' +
-        '<div class="popup-row"><span class="popup-label">최근접 존</span><b>' + (g.nearest_zone_km || '-') + 'km</b></div>'
-    ).addTo(gapLayer);
+    }}).bindPopup(gapPopup(g)).addTo(gapLayer);
+    L.circleMarker([g.lat, g.lng], {{
+        radius: 3, fillColor: '#c0392b', color: '#c0392b', weight: 0, fillOpacity: 0.8
+    }}).bindPopup(gapPopup(g)).addTo(gapLayer);
 }});
 
 var gapListDiv = document.getElementById('gapList');
@@ -3387,12 +3391,8 @@ if (gapRegionSelect) {{
 
 // 재진입 추천구역 레이어
 var reentryLayer = L.layerGroup();
-reentryData.forEach(function(z) {{
-    L.circle([z.lat, z.lng], {{
-        radius: 500,
-        fillColor: '#ec407a', color: '#c2185b', weight: 1.5, opacity: 0.7, fillOpacity: 0.12
-    }}).bindPopup(
-        '<div class="popup-title">' + z.zone_name + ' <span class="popup-badge" style="background:#ec407a">재진입 추천</span></div>' +
+var reentryPopup = function(z) {{
+    return '<div class="popup-title">' + z.zone_name + ' <span class="popup-badge" style="background:#ec407a">재진입 추천</span></div>' +
         '<div class="popup-row"><span class="popup-label">주차장</span><span>' + z.parking_name + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">주소</span><span>' + z.address + '</span></div>' +
         (z.provider_name ? '<div class="popup-row"><span class="popup-label">거래처</span><span><b>' + z.provider_name + '</b></span></div>' : '') +
@@ -3409,8 +3409,16 @@ reentryData.forEach(function(z) {{
         '<div class="popup-row"><span class="popup-label">운영일수</span><span><b>' + z.operation_days + '</b>일</span></div>' +
         '<div class="popup-row"><span class="popup-label">가동률</span><span><b>' + z.utilization_rate + '</b>%</span></div>' +
         '<div class="popup-row"><span class="popup-label">대당 매출</span><span><b style="color:#0064FF">' + (z.revenue_per_car_28d||0).toLocaleString() + '</b>원/28일</span></div>' +
-        '<div class="popup-row"><span class="popup-label">대당 GP</span><span><b>' + (z.gp_per_car_28d||0).toLocaleString() + '</b>원/28일</span></div>'
-    ).addTo(reentryLayer);
+        '<div class="popup-row"><span class="popup-label">대당 GP</span><span><b>' + (z.gp_per_car_28d||0).toLocaleString() + '</b>원/28일</span></div>';
+}};
+reentryData.forEach(function(z) {{
+    L.circle([z.lat, z.lng], {{
+        radius: 500,
+        fillColor: '#ec407a', color: '#c2185b', weight: 1.5, opacity: 0.7, fillOpacity: 0.12
+    }}).bindPopup(reentryPopup(z)).addTo(reentryLayer);
+    L.circleMarker([z.lat, z.lng], {{
+        radius: 3, fillColor: '#c2185b', color: '#c2185b', weight: 0, fillOpacity: 0.8
+    }}).bindPopup(reentryPopup(z)).addTo(reentryLayer);
 }});
 
 var reentryListDiv = document.getElementById('reentryList');
