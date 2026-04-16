@@ -15,6 +15,15 @@ PORT = 8080
 DIR = os.path.dirname(os.path.abspath(__file__))
 LAST_UPDATE_DEMAND = os.path.join(DIR, '.last_update_demand')
 LAST_UPDATE_ZONE = os.path.join(DIR, '.last_update_zone')
+API_CONFIG_PATH = os.path.join(DIR, '.api_config.json')
+
+
+def get_api_config():
+    try:
+        with open(API_CONFIG_PATH) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
 
 
 def get_last_update(path):
@@ -55,14 +64,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.handle_d2d_destinations()
         elif self.path == '/api/dashboard-analyze':
             self.handle_dashboard_analyze()
+        elif self.path == '/api/dashboard-region3':
+            self.handle_dashboard_region3()
         else:
             self.send_error(404)
 
     def do_GET(self):
         if self.path == '/api/status':
             self.handle_status()
+        elif self.path == '/api/ai-config':
+            self.handle_ai_config()
         elif self.path.startswith('/api/dashboard'):
             self.handle_dashboard()
+        elif self.path == '/' and 'dustin.ngrok.app' in self.headers.get('Host', ''):
+            self.send_response(302)
+            self.send_header('Location', '/dashboard.html')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
         else:
             super().do_GET()
 
@@ -87,6 +105,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._send_json(200, {
             'last_update_demand': get_last_update(LAST_UPDATE_DEMAND),
             'last_update_zone': get_last_update(LAST_UPDATE_ZONE),
+        })
+
+    def handle_ai_config(self):
+        cfg = get_api_config()
+        self._send_json(200, {
+            'configured': bool(cfg.get('api_key', '').strip()),
+            'model': cfg.get('model', 'claude-sonnet-4-5-20251001'),
         })
 
     def handle_update_demand(self):
@@ -229,6 +254,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         profit = load('profit') or {}
         supply_demand = load('supply_demand') or {}
         dashboard_metrics = load('dashboard_metrics') or {}
+        dashboard_region2 = load('dashboard_region2') or {}
+        dashboard_region3 = load('dashboard_region3') or {}
 
         # 존+실적 병합
         profit_int = {int(k): v for k, v in profit.items()}
@@ -250,7 +277,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 'revenue_per_res': p.get('revenue_per_res', 0),
             })
 
-        # 팀 전체 요약 (supply_demand 첫 번째 항목 = 팀 전체)
+        # 팀 전체 요약
         summary = {}
         for section in ('growth', 'decline'):
             for item in (supply_demand.get(section) or []):
@@ -264,12 +291,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             'team_id': team_id,
             'summary': summary,
             'zones': zone_rows,
-            'monthly': dashboard_metrics.get('monthly', []),
+            'weekly': dashboard_metrics.get('weekly', []),
+            'weekly_region2': dashboard_region2.get('weekly', []),
+            'weekly_region3': dashboard_region3.get('weekly', []),
             'generated_at': dashboard_metrics.get('generated_at') or get_last_update(LAST_UPDATE_ZONE),
         })
 
     def handle_dashboard_analyze(self):
-        """LLM 실적 분석 — 사용자 API 키로 Claude/OpenAI 호출"""
+        """LLM 실적 분석 — 내부 LLM Gateway (LiteLLM) 호출"""
         import urllib.request as req_lib
         try:
             length = int(self.headers.get('Content-Length', 0))
@@ -278,55 +307,66 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json(400, {'error': '요청 파싱 실패'})
             return
 
-        api_key = body.get('api_key', '').strip()
-        model = body.get('model', 'claude-sonnet-4-5')
+        cfg = get_api_config()
+        api_key = cfg.get('api_key', '').strip()
+        gateway_url = cfg.get('gateway_url', 'https://litellm.ai.socarcorp.co.kr/v1/chat/completions')
+        model = body.get('model') or cfg.get('model', 'dev/claude-4.6-sonnet')
         prompt = body.get('prompt', '')
 
-        if not api_key or not prompt:
-            self._send_json(400, {'error': 'api_key와 prompt가 필요합니다'})
+        if not api_key:
+            self._send_json(400, {'error': 'API 키가 서버에 설정되지 않았습니다. .api_config.json에 api_key를 입력하세요.'})
             return
 
-        try:
-            if model.startswith('gpt') or model.startswith('o'):
-                # OpenAI
-                payload = json.dumps({
-                    'model': model,
-                    'messages': [{'role': 'user', 'content': prompt}],
-                    'max_tokens': 2000,
-                    'temperature': 0.3,
-                }).encode()
-                request = req_lib.Request(
-                    'https://api.openai.com/v1/chat/completions',
-                    data=payload,
-                    headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'},
-                )
-                with req_lib.urlopen(request, timeout=60) as resp:
-                    result = json.loads(resp.read())
-                text = result['choices'][0]['message']['content']
-            else:
-                # Anthropic Claude
-                payload = json.dumps({
-                    'model': model,
-                    'max_tokens': 2000,
-                    'temperature': 0.3,
-                    'messages': [{'role': 'user', 'content': prompt}],
-                }).encode()
-                request = req_lib.Request(
-                    'https://api.anthropic.com/v1/messages',
-                    data=payload,
-                    headers={
-                        'Content-Type': 'application/json',
-                        'x-api-key': api_key,
-                        'anthropic-version': '2023-06-01',
-                    },
-                )
-                with req_lib.urlopen(request, timeout=60) as resp:
-                    result = json.loads(resp.read())
-                text = result['content'][0]['text']
+        messages = body.get('messages')
+        if not messages and not prompt:
+            self._send_json(400, {'error': 'prompt 또는 messages가 필요합니다'})
+            return
+        if not messages:
+            messages = [{'role': 'user', 'content': prompt}]
 
+        try:
+            # LiteLLM Gateway — OpenAI 호환 단일 포맷
+            # messages 배열 직접 전달 지원 (대화 히스토리 포함)
+            payload = json.dumps({
+                'model': model,
+                'messages': messages,
+                'max_tokens': 2000,
+                'temperature': 0.5,
+            }).encode()
+            request = req_lib.Request(
+                gateway_url,
+                data=payload,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {api_key}',
+                },
+            )
+            with req_lib.urlopen(request, timeout=90) as resp:
+                result = json.loads(resp.read())
+            text = result['choices'][0]['message']['content']
             self._send_json(200, {'result': text})
         except Exception as e:
             self._send_json(500, {'error': str(e)})
+
+    def handle_dashboard_region3(self):
+        """특정 region2의 region3별 실적 조회 (캐시에서 필터링)"""
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+        except Exception:
+            self._send_json(400, {'error': '요청 파싱 실패'})
+            return
+        team_id = body.get('team_id', 'gyeonggi')
+        region2 = body.get('region2', '')
+        cache_dir = os.path.join(DIR, '.cache', team_id)
+        p = os.path.join(cache_dir, 'dashboard_region3.json')
+        if not os.path.exists(p):
+            self._send_json(404, {'error': 'region3 데이터 없음. 존/실적 업데이트를 먼저 실행하세요.'})
+            return
+        with open(p) as f:
+            data = json.load(f)
+        filtered = [r for r in data.get('weekly', []) if r.get('region2_parent', '') == region2]
+        self._send_json(200, {'weekly': filtered})
 
     def log_message(self, format, *args):
         if '/api/' in str(args[0]):

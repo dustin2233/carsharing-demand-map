@@ -1229,62 +1229,460 @@ def query_zone_profit(team_id='gyeonggi'):
 
 
 def query_dashboard_metrics(team_id='gyeonggi'):
-    """월별 실적 집계 (최근 14개월) — 실적 대시보드용 캐시"""
-    region_filter = _region1_sql(team_id)
+    """ISOYEAR/ISOWEEK 기준 주간 실적 집계 (2025~2026) — 레퍼런스 쿼리 기반
+    존 제외 필터 적용 (매각/비즈니스/시승 등), car_count=SUM(opr_day)/7, 미완성 주 제외
+    """
+    z_region = _region1_sql_col(team_id, 'z.region_1')
+    excl = r'(매각|비즈니스|시승|장착|캐리어|캠핑카|경매|부름호출존|플랜)'
     sql = f"""
-    WITH profit_monthly AS (
-        SELECT
-            FORMAT_DATE('%Y-%m', date) AS month,
-            COUNT(DISTINCT zone_id)  AS active_zones,
-            COUNT(DISTINCT car_id)   AS active_cars,
-            CAST(SUM(revenue) AS INT64) AS total_revenue,
-            CAST(SUM(profit)  AS INT64) AS total_gp,
-            CAST(SUM(nuse)    AS INT64) AS total_nuse,
-            SUM(opr_day) AS total_opr_day,
-            ROUND(SAFE_DIVIDE(SUM(revenue) * 28, NULLIF(SUM(opr_day), 0))) AS revenue_per_car_28d,
-            ROUND(SAFE_DIVIDE(SUM(profit)  * 28, NULLIF(SUM(opr_day), 0))) AS gp_per_car_28d,
-            ROUND(SAFE_DIVIDE(SUM(revenue), NULLIF(SUM(nuse), 0)))          AS revenue_per_res
-        FROM `socar-data.socar_biz_profit.profit_socar_car_daily`
-        WHERE {region_filter}
-            AND car_state IN ('운영', '수리')
-            AND car_sharing_type IN ('socar', 'zplus')
-            AND date >= DATE_TRUNC(DATE_SUB(CURRENT_DATE('Asia/Seoul'), INTERVAL 14 MONTH), MONTH)
-        GROUP BY 1
+    WITH
+    demand AS (
+      SELECT
+        EXTRACT(ISOYEAR FROM DATE(l.start_at, 'Asia/Seoul')) AS isoyear,
+        EXTRACT(ISOWEEK  FROM DATE(l.start_at, 'Asia/Seoul')) AS isoweek,
+        COUNT(*) AS attempt,
+        SAFE_DIVIDE(COUNTIF(l.available_car_count = 0), COUNT(*)) AS fail_rate
+      FROM `socar-data.service_metrics.log_get_car_classes` l
+      INNER JOIN `socar-data.socar_zone.zone` z ON l.zone_id = z.legacy_zone_id
+      WHERE {z_region}
+        AND NOT REGEXP_CONTAINS(z.name, r'{excl}')
+        AND EXTRACT(ISOYEAR FROM DATE(l.start_at, 'Asia/Seoul')) IN (2025, 2026)
+        AND DATE(l.start_at, 'Asia/Seoul') < CURRENT_DATE('Asia/Seoul')
+        AND NOT (
+          EXTRACT(ISOYEAR FROM DATE(l.start_at, 'Asia/Seoul')) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK  FROM DATE(l.start_at, 'Asia/Seoul')) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )
+      GROUP BY 1, 2
     ),
-    util_monthly AS (
-        SELECT
-            FORMAT_DATE('%Y-%m', date) AS month,
-            ROUND(SAFE_DIVIDE(SUM(op_min), SUM(dp_min) - SUM(bl_min)) * 100, 1) AS utilization_rate
-        FROM `socar-data.socar_biz.operation_per_car_daily_v2`
-        WHERE {region_filter}
-            AND date >= DATE_TRUNC(DATE_SUB(CURRENT_DATE('Asia/Seoul'), INTERVAL 14 MONTH), MONTH)
-        GROUP BY 1
+    profit AS (
+      SELECT
+        EXTRACT(ISOYEAR FROM p.date) AS isoyear,
+        EXTRACT(ISOWEEK  FROM p.date) AS isoweek,
+        SAFE_DIVIDE(SUM(p.opr_day), 7)                               AS car_count,
+        COUNT(DISTINCT p.zone_id)                                    AS zone_count,
+        SUM(p.revenue)                                               AS revenue,
+        SUM(p.profit)                                                AS profit,
+        SUM(p.nuse)                                                  AS use_count,
+        SAFE_DIVIDE(SUM(p.profit),  SUM(p.revenue))                  AS gpm,
+        SAFE_DIVIDE(SUM(p.revenue), SAFE_DIVIDE(SUM(p.opr_day), 7))  AS rev_per_car
+      FROM `socar-data.socar_biz_profit.profit_socar_car_daily` p
+      INNER JOIN `socar-data.socar_zone.zone` z ON z.legacy_zone_id = p.zone_id
+      WHERE {z_region}
+        AND p.car_sharing_type IN ('socar', 'zplus')
+        AND p.car_state IN ('운영', '수리')
+        AND NOT REGEXP_CONTAINS(z.name, r'{excl}')
+        AND EXTRACT(ISOYEAR FROM p.date) IN (2025, 2026)
+        AND p.date < CURRENT_DATE('Asia/Seoul')
+        AND NOT (
+          EXTRACT(ISOYEAR FROM p.date) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK  FROM p.date) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )
+      GROUP BY 1, 2
+    ),
+    way AS (
+      SELECT
+        EXTRACT(ISOYEAR FROM r.return_at_kst) AS isoyear,
+        EXTRACT(ISOWEEK  FROM r.return_at_kst) AS isoweek,
+        CASE
+          WHEN r.way = 'round'                     THEN '왕복'
+          WHEN r.way IN ('d2d_oneway','d2d_round') THEN '부름'
+          WHEN r.way = 'z2d_oneway'               THEN '편도'
+          ELSE '기타'
+        END AS way_type,
+        COUNT(DISTINCT r.reservation_id)          AS w_count,
+        SUM(r.utime)                              AS w_utime,
+        SUM(r.revenue)                            AS w_revenue,
+        SUM(r.__rev_rent)                         AS w_price,
+        SUM(r.__rev_rent_discount)                AS w_discount,
+        COUNTIF(r.utime < 60)                     AS w_utime_u1h,
+        COUNTIF(r.utime >= 60  AND r.utime < 240) AS w_utime_1to4h,
+        COUNTIF(r.utime >= 240 AND r.utime < 720) AS w_utime_4to12h,
+        COUNTIF(r.utime >= 720)                   AS w_utime_o12h
+      FROM `socar-data.socar_biz_profit.profit_socar_reservation` r
+      INNER JOIN `socar-data.socar_zone.zone` z ON r.zone_id = z.legacy_zone_id
+      WHERE {z_region}
+        AND NOT REGEXP_CONTAINS(z.name, r'{excl}')
+        AND EXTRACT(ISOYEAR FROM r.return_at_kst) IN (2025, 2026)
+        AND r.return_at_kst < CAST(CURRENT_DATE('Asia/Seoul') AS DATETIME)
+        AND NOT (
+          EXTRACT(ISOYEAR FROM r.return_at_kst) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK  FROM r.return_at_kst) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )
+      GROUP BY 1, 2, 3
+    ),
+    way_pivot AS (
+      SELECT
+        isoyear, isoweek,
+        SAFE_DIVIDE(-SUM(w_discount), NULLIF(SUM(w_price), 0))       AS discount_rate,
+        SUM(IF(way_type='왕복', w_count,   0))                       AS round_count,
+        SAFE_DIVIDE(SUM(IF(way_type='왕복', w_revenue, 0)),
+                    NULLIF(SUM(IF(way_type='왕복', w_count, 0)),0))   AS round_rev_per_use,
+        SAFE_DIVIDE(SUM(IF(way_type='왕복', w_utime, 0)),
+                    NULLIF(SUM(IF(way_type='왕복', w_count, 0)),0)) / 60.0 AS round_avg_hours,
+        SUM(IF(way_type='편도', w_count,   0))                       AS oneway_count,
+        SAFE_DIVIDE(SUM(IF(way_type='편도', w_revenue, 0)),
+                    NULLIF(SUM(IF(way_type='편도', w_count, 0)),0))   AS oneway_rev_per_use,
+        SAFE_DIVIDE(SUM(IF(way_type='편도', w_utime, 0)),
+                    NULLIF(SUM(IF(way_type='편도', w_count, 0)),0)) / 60.0 AS oneway_avg_hours,
+        SUM(IF(way_type='부름', w_count,   0))                       AS d2d_count,
+        SAFE_DIVIDE(SUM(IF(way_type='부름', w_revenue, 0)),
+                    NULLIF(SUM(IF(way_type='부름', w_count, 0)),0))   AS d2d_rev_per_use,
+        SAFE_DIVIDE(SUM(IF(way_type='부름', w_utime, 0)),
+                    NULLIF(SUM(IF(way_type='부름', w_count, 0)),0)) / 60.0 AS d2d_avg_hours,
+        -- utime 구간별 건수 (전체 way_type 합산)
+        SUM(IF(w_utime_u1h   IS NOT NULL, w_utime_u1h,   0))  AS u_under1h,
+        SUM(IF(w_utime_1to4h IS NOT NULL, w_utime_1to4h, 0))  AS u_1to4h,
+        SUM(IF(w_utime_4to12h IS NOT NULL,w_utime_4to12h,0))  AS u_4to12h,
+        SUM(IF(w_utime_o12h  IS NOT NULL, w_utime_o12h,  0))  AS u_over12h
+      FROM way GROUP BY 1, 2
+    ),
+    payment AS (
+      SELECT
+        EXTRACT(ISOYEAR FROM DATE(v.timeMs, 'Asia/Seoul')) AS isoyear,
+        EXTRACT(ISOWEEK  FROM DATE(v.timeMs, 'Asia/Seoul')) AS isoweek,
+        COUNT(*) AS payment_attempt
+      FROM `socar-data.socar_server_3.GET_CURRENT_CAR_RENTAL_VIEW` v
+      INNER JOIN `socar-data.socar_zone.zone` z
+             ON SAFE_CAST(v.carRental.startPoint.zoneId AS INT64) = z.legacy_zone_id
+      WHERE {z_region}
+        AND v.carRental.startPoint.zoneId IS NOT NULL
+        AND EXTRACT(ISOYEAR FROM DATE(v.timeMs, 'Asia/Seoul')) IN (2025, 2026)
+        AND DATE(v.timeMs, 'Asia/Seoul') < CURRENT_DATE('Asia/Seoul')
+        AND NOT (
+          EXTRACT(ISOYEAR FROM DATE(v.timeMs, 'Asia/Seoul')) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK  FROM DATE(v.timeMs, 'Asia/Seoul')) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )
+      GROUP BY 1, 2
+    ),
+    util AS (
+      SELECT
+        EXTRACT(ISOYEAR FROM o.date) AS isoyear,
+        EXTRACT(ISOWEEK  FROM o.date) AS isoweek,
+        SAFE_DIVIDE(
+          SUM(IF(EXTRACT(DAYOFWEEK FROM o.date) BETWEEN 2 AND 6, o.op_min, 0)),
+          NULLIF(SUM(IF(EXTRACT(DAYOFWEEK FROM o.date) BETWEEN 2 AND 6,
+                       o.dp_min - o.bl_min, 0)), 0)
+        ) AS opr_weekday,
+        SAFE_DIVIDE(
+          SUM(IF(EXTRACT(DAYOFWEEK FROM o.date) IN (1, 7), o.op_min, 0)),
+          NULLIF(SUM(IF(EXTRACT(DAYOFWEEK FROM o.date) IN (1, 7),
+                       o.dp_min - o.bl_min, 0)), 0)
+        ) AS opr_weekend
+      FROM `socar-data.socar_biz.operation_per_car_daily_v2` o
+      INNER JOIN `socar-data.socar_zone.zone` z ON o.zone_id = z.legacy_zone_id
+      WHERE {z_region}
+        AND NOT REGEXP_CONTAINS(z.name, r'{excl}')
+        AND EXTRACT(ISOYEAR FROM o.date) IN (2025, 2026)
+        AND o.date < CURRENT_DATE('Asia/Seoul')
+        AND NOT (
+          EXTRACT(ISOYEAR FROM o.date) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK  FROM o.date) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )
+      GROUP BY 1, 2
     )
-    SELECT p.*, COALESCE(u.utilization_rate, 0) AS utilization_rate
-    FROM profit_monthly p
-    LEFT JOIN util_monthly u ON p.month = u.month
-    ORDER BY p.month
+    SELECT
+      p.isoyear, p.isoweek,
+      CASE WHEN p.isoyear = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+           THEN 'now' ELSE 'yoy' END AS period_type,
+      p.car_count, p.zone_count,
+      d.attempt, d.fail_rate,
+      p.revenue, p.profit, p.gpm, p.rev_per_car,
+      p.use_count,
+      wp.discount_rate,
+      wp.round_count,   wp.round_rev_per_use,  wp.round_avg_hours,
+      wp.oneway_count,  wp.oneway_rev_per_use, wp.oneway_avg_hours,
+      wp.d2d_count,     wp.d2d_rev_per_use,    wp.d2d_avg_hours,
+      u.opr_weekday, u.opr_weekend,
+      IFNULL(wp.u_under1h, 0)  AS u_under1h,
+      IFNULL(wp.u_1to4h,   0)  AS u_1to4h,
+      IFNULL(wp.u_4to12h,  0)  AS u_4to12h,
+      IFNULL(wp.u_over12h, 0)  AS u_over12h,
+      IFNULL(pay.payment_attempt, 0) AS payment_attempt
+    FROM profit p
+    LEFT JOIN demand    d   ON p.isoyear = d.isoyear   AND p.isoweek = d.isoweek
+    LEFT JOIN way_pivot wp  ON p.isoyear = wp.isoyear  AND p.isoweek = wp.isoweek
+    LEFT JOIN util      u   ON p.isoyear = u.isoyear   AND p.isoweek = u.isoweek
+    LEFT JOIN payment   pay ON p.isoyear = pay.isoyear AND p.isoweek = pay.isoweek
+    ORDER BY p.isoyear DESC, p.isoweek DESC
     """
     try:
-        rows = run_bq(sql, max_rows=20)
+        rows = run_bq(sql, max_rows=200)
     except Exception as e:
-        print(f"  [경고] 대시보드 월별 실적 조회 실패: {e}")
-        return {"monthly": []}
-    monthly = []
+        print(f"  [경고] 대시보드 주간 실적 조회 실패: {e}")
+        return {'weekly': []}
+    weekly = []
     for r in rows:
-        monthly.append({
-            'month': r['month'],
-            'active_zones': int(r.get('active_zones', 0) or 0),
-            'active_cars':  int(r.get('active_cars', 0) or 0),
-            'total_revenue': int(r.get('total_revenue', 0) or 0),
-            'total_gp':      int(r.get('total_gp', 0) or 0),
-            'total_nuse':    int(r.get('total_nuse', 0) or 0),
-            'revenue_per_car_28d': int(float(r.get('revenue_per_car_28d', 0) or 0)),
-            'gp_per_car_28d':      int(float(r.get('gp_per_car_28d', 0) or 0)),
-            'utilization_rate':    float(r.get('utilization_rate', 0) or 0),
-            'revenue_per_res':     int(float(r.get('revenue_per_res', 0) or 0)),
+        weekly.append({
+            'isoyear':           int(r['isoyear']),
+            'isoweek':           int(r['isoweek']),
+            'period_type':       r['period_type'],
+            'car_count':         round(float(r.get('car_count') or 0), 1),
+            'zone_count':        int(r.get('zone_count') or 0),
+            'attempt':           int(r.get('attempt') or 0),
+            'fail_rate':         round(float(r.get('fail_rate') or 0), 4),
+            'revenue':           int(float(r.get('revenue') or 0)),
+            'profit':            int(float(r.get('profit') or 0)),
+            'gpm':               round(float(r.get('gpm') or 0), 4),
+            'rev_per_car':       round(float(r.get('rev_per_car') or 0)),
+            'use_count':         int(float(r.get('use_count') or 0)),
+            'discount_rate':     round(float(r.get('discount_rate') or 0), 4),
+            'round_count':       int(float(r.get('round_count') or 0)),
+            'round_rev_per_use': round(float(r.get('round_rev_per_use') or 0)),
+            'round_avg_hours':   round(float(r.get('round_avg_hours') or 0), 2),
+            'oneway_count':      int(float(r.get('oneway_count') or 0)),
+            'oneway_rev_per_use':round(float(r.get('oneway_rev_per_use') or 0)),
+            'oneway_avg_hours':  round(float(r.get('oneway_avg_hours') or 0), 2),
+            'd2d_count':         int(float(r.get('d2d_count') or 0)),
+            'd2d_rev_per_use':   round(float(r.get('d2d_rev_per_use') or 0)),
+            'd2d_avg_hours':     round(float(r.get('d2d_avg_hours') or 0), 2),
+            'opr_weekday':       round(float(r.get('opr_weekday') or 0), 4),
+            'opr_weekend':       round(float(r.get('opr_weekend') or 0), 4),
+            'u_under1h':         int(float(r.get('u_under1h') or 0)),
+            'u_1to4h':           int(float(r.get('u_1to4h') or 0)),
+            'u_4to12h':          int(float(r.get('u_4to12h') or 0)),
+            'u_over12h':         int(float(r.get('u_over12h') or 0)),
+            'payment_attempt':   int(float(r.get('payment_attempt') or 0)),
         })
-    return {'monthly': monthly, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M')}
+    return {'weekly': weekly, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+
+def query_dashboard_by_region(team_id='gyeonggi', region_level='region2'):
+    """지역별 주간 실적 집계 (region2 또는 region3 단위) — 전체 메트릭 포함
+    carzone_info의 region2/region3 컬럼 기준, region1 포함 반환
+    매출/GPM/이용건수/가동률/왕복·편도·부름/수요 모두 포함
+    """
+    z_region = _region1_sql_col(team_id, 'z.region_1')
+    excl = r'(매각|비즈니스|시승|장착|캐리어|캠핑카|경매|부름호출존|플랜)'
+    region_col = f'cz.{region_level}'
+    parent_col = 'cz.region2' if region_level == 'region3' else "CAST('' AS STRING)"
+    week_filter = """
+        AND EXTRACT(ISOYEAR FROM p.date) IN (2025, 2026)
+        AND p.date < CURRENT_DATE('Asia/Seoul')
+        AND NOT (
+          EXTRACT(ISOYEAR FROM p.date) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK FROM p.date) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )"""
+    sql = f"""
+    WITH
+    perf AS (
+      SELECT
+        z.region_1 AS region1, {parent_col} AS region2_parent, {region_col} AS region,
+        EXTRACT(ISOYEAR FROM p.date) AS isoyear, EXTRACT(ISOWEEK FROM p.date) AS isoweek,
+        SAFE_DIVIDE(SUM(p.opr_day), 7)                              AS car_count,
+        COUNT(DISTINCT p.zone_id)                                   AS zone_count,
+        SUM(p.revenue)                                              AS revenue,
+        SUM(p.profit)                                               AS profit,
+        SUM(p.nuse)                                                 AS use_count,
+        SAFE_DIVIDE(SUM(p.profit), SUM(p.revenue))                  AS gpm,
+        SAFE_DIVIDE(SUM(p.revenue), SAFE_DIVIDE(SUM(p.opr_day),7))  AS rev_per_car
+      FROM `socar-data.socar_biz_profit.profit_socar_car_daily` p
+      INNER JOIN `socar-data.socar_zone.zone` z ON z.legacy_zone_id = p.zone_id
+      INNER JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
+      WHERE {z_region}
+        AND p.car_sharing_type IN ('socar', 'zplus')
+        AND p.car_state IN ('운영', '수리')
+        AND NOT REGEXP_CONTAINS(z.name, r'{excl}')
+        {week_filter}
+      GROUP BY 1, 2, 3, 4, 5
+    ),
+    util AS (
+      SELECT
+        z.region_1 AS region1, {parent_col} AS region2_parent, {region_col} AS region,
+        EXTRACT(ISOYEAR FROM o.date) AS isoyear, EXTRACT(ISOWEEK FROM o.date) AS isoweek,
+        SAFE_DIVIDE(
+          SUM(IF(EXTRACT(DAYOFWEEK FROM o.date) BETWEEN 2 AND 6, o.op_min, 0)),
+          NULLIF(SUM(IF(EXTRACT(DAYOFWEEK FROM o.date) BETWEEN 2 AND 6, o.dp_min - o.bl_min, 0)), 0)
+        ) AS opr_weekday,
+        SAFE_DIVIDE(
+          SUM(IF(EXTRACT(DAYOFWEEK FROM o.date) IN (1,7), o.op_min, 0)),
+          NULLIF(SUM(IF(EXTRACT(DAYOFWEEK FROM o.date) IN (1,7), o.dp_min - o.bl_min, 0)), 0)
+        ) AS opr_weekend
+      FROM `socar-data.socar_biz.operation_per_car_daily_v2` o
+      INNER JOIN `socar-data.socar_zone.zone` z ON o.zone_id = z.legacy_zone_id
+      INNER JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
+      WHERE {z_region}
+        AND NOT REGEXP_CONTAINS(z.name, r'{excl}')
+        AND EXTRACT(ISOYEAR FROM o.date) IN (2025, 2026)
+        AND o.date < CURRENT_DATE('Asia/Seoul')
+        AND NOT (
+          EXTRACT(ISOYEAR FROM o.date) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK FROM o.date) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )
+      GROUP BY 1, 2, 3, 4, 5
+    ),
+    way_raw AS (
+      SELECT
+        z.region_1 AS region1, {parent_col} AS region2_parent, {region_col} AS region,
+        EXTRACT(ISOYEAR FROM r.return_at_kst) AS isoyear,
+        EXTRACT(ISOWEEK  FROM r.return_at_kst) AS isoweek,
+        CASE
+          WHEN r.way = 'round'                     THEN '왕복'
+          WHEN r.way IN ('d2d_oneway','d2d_round') THEN '부름'
+          WHEN r.way = 'z2d_oneway'               THEN '편도'
+          ELSE '기타'
+        END AS way_type,
+        COUNT(DISTINCT r.reservation_id) AS w_count,
+        SUM(r.utime)               AS w_utime,
+        SUM(r.revenue)             AS w_revenue,
+        SUM(r.__rev_rent)          AS w_price,
+        SUM(r.__rev_rent_discount) AS w_discount,
+        COUNTIF(r.utime < 60)                     AS w_utime_u1h,
+        COUNTIF(r.utime >= 60  AND r.utime < 240) AS w_utime_1to4h,
+        COUNTIF(r.utime >= 240 AND r.utime < 720) AS w_utime_4to12h,
+        COUNTIF(r.utime >= 720)                   AS w_utime_o12h
+      FROM `socar-data.socar_biz_profit.profit_socar_reservation` r
+      INNER JOIN `socar-data.socar_zone.zone` z ON r.zone_id = z.legacy_zone_id
+      INNER JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
+      WHERE {z_region}
+        AND NOT REGEXP_CONTAINS(z.name, r'{excl}')
+        AND EXTRACT(ISOYEAR FROM r.return_at_kst) IN (2025, 2026)
+        AND r.return_at_kst < CAST(CURRENT_DATE('Asia/Seoul') AS DATETIME)
+        AND NOT (
+          EXTRACT(ISOYEAR FROM r.return_at_kst) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK  FROM r.return_at_kst) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )
+      GROUP BY 1, 2, 3, 4, 5, 6
+    ),
+    way AS (
+      SELECT
+        region1, region2_parent, region, isoyear, isoweek,
+        SAFE_DIVIDE(-SUM(w_discount), NULLIF(SUM(w_price),0))                AS discount_rate,
+        SUM(IF(way_type='왕복', w_count,   0))                               AS round_count,
+        SAFE_DIVIDE(SUM(IF(way_type='왕복', w_revenue, 0)),
+                    NULLIF(SUM(IF(way_type='왕복', w_count, 0)),0))           AS round_rev_per_use,
+        SAFE_DIVIDE(SUM(IF(way_type='왕복', w_utime, 0)),
+                    NULLIF(SUM(IF(way_type='왕복', w_count, 0)),0)) / 60.0   AS round_avg_hours,
+        SUM(IF(way_type='편도', w_count,   0))                               AS oneway_count,
+        SAFE_DIVIDE(SUM(IF(way_type='편도', w_revenue, 0)),
+                    NULLIF(SUM(IF(way_type='편도', w_count, 0)),0))           AS oneway_rev_per_use,
+        SAFE_DIVIDE(SUM(IF(way_type='편도', w_utime, 0)),
+                    NULLIF(SUM(IF(way_type='편도', w_count, 0)),0)) / 60.0   AS oneway_avg_hours,
+        SUM(IF(way_type='부름', w_count,   0))                               AS d2d_count,
+        SAFE_DIVIDE(SUM(IF(way_type='부름', w_revenue, 0)),
+                    NULLIF(SUM(IF(way_type='부름', w_count, 0)),0))           AS d2d_rev_per_use,
+        SAFE_DIVIDE(SUM(IF(way_type='부름', w_utime, 0)),
+                    NULLIF(SUM(IF(way_type='부름', w_count, 0)),0)) / 60.0   AS d2d_avg_hours,
+        SUM(IF(w_utime_u1h   IS NOT NULL, w_utime_u1h,   0))                AS u_under1h,
+        SUM(IF(w_utime_1to4h IS NOT NULL, w_utime_1to4h, 0))                AS u_1to4h,
+        SUM(IF(w_utime_4to12h IS NOT NULL,w_utime_4to12h,0))                AS u_4to12h,
+        SUM(IF(w_utime_o12h  IS NOT NULL, w_utime_o12h,  0))                AS u_over12h
+      FROM way_raw GROUP BY 1, 2, 3, 4, 5
+    ),
+    payment AS (
+      SELECT
+        z.region_1 AS region1, {parent_col} AS region2_parent, {region_col} AS region,
+        EXTRACT(ISOYEAR FROM DATE(v.timeMs, 'Asia/Seoul')) AS isoyear,
+        EXTRACT(ISOWEEK  FROM DATE(v.timeMs, 'Asia/Seoul')) AS isoweek,
+        COUNT(*) AS payment_attempt
+      FROM `socar-data.socar_server_3.GET_CURRENT_CAR_RENTAL_VIEW` v
+      INNER JOIN `socar-data.socar_zone.zone` z
+             ON SAFE_CAST(v.carRental.startPoint.zoneId AS INT64) = z.legacy_zone_id
+      INNER JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
+      WHERE {z_region}
+        AND NOT REGEXP_CONTAINS(z.name, r'{excl}')
+        AND v.carRental.startPoint.zoneId IS NOT NULL
+        AND EXTRACT(ISOYEAR FROM DATE(v.timeMs, 'Asia/Seoul')) IN (2025, 2026)
+        AND DATE(v.timeMs, 'Asia/Seoul') < CURRENT_DATE('Asia/Seoul')
+        AND NOT (
+          EXTRACT(ISOYEAR FROM DATE(v.timeMs, 'Asia/Seoul')) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK  FROM DATE(v.timeMs, 'Asia/Seoul')) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )
+      GROUP BY 1, 2, 3, 4, 5
+    ),
+    demand AS (
+      SELECT
+        z.region_1 AS region1, {parent_col} AS region2_parent, {region_col} AS region,
+        EXTRACT(ISOYEAR FROM DATE(l.start_at, 'Asia/Seoul')) AS isoyear,
+        EXTRACT(ISOWEEK  FROM DATE(l.start_at, 'Asia/Seoul')) AS isoweek,
+        COUNT(*) AS attempt,
+        SAFE_DIVIDE(COUNTIF(l.available_car_count = 0), COUNT(*)) AS fail_rate
+      FROM `socar-data.service_metrics.log_get_car_classes` l
+      INNER JOIN `socar-data.socar_zone.zone` z ON l.zone_id = z.legacy_zone_id
+      INNER JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
+      WHERE {z_region}
+        AND NOT REGEXP_CONTAINS(z.name, r'{excl}')
+        AND EXTRACT(ISOYEAR FROM DATE(l.start_at, 'Asia/Seoul')) IN (2025, 2026)
+        AND DATE(l.start_at, 'Asia/Seoul') < CURRENT_DATE('Asia/Seoul')
+        AND NOT (
+          EXTRACT(ISOYEAR FROM DATE(l.start_at, 'Asia/Seoul')) = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+          AND EXTRACT(ISOWEEK  FROM DATE(l.start_at, 'Asia/Seoul')) >= EXTRACT(ISOWEEK FROM CURRENT_DATE('Asia/Seoul'))
+        )
+      GROUP BY 1, 2, 3, 4, 5
+    )
+    SELECT
+      p.region1, p.region2_parent, p.region, p.isoyear, p.isoweek,
+      CASE WHEN p.isoyear = EXTRACT(ISOYEAR FROM CURRENT_DATE('Asia/Seoul'))
+           THEN 'now' ELSE 'yoy' END AS period_type,
+      p.car_count, p.zone_count, p.revenue, p.profit, p.gpm, p.rev_per_car, p.use_count,
+      IFNULL(u.opr_weekday, 0)     AS opr_weekday,
+      IFNULL(u.opr_weekend, 0)     AS opr_weekend,
+      IFNULL(w.discount_rate, 0)   AS discount_rate,
+      IFNULL(w.round_count, 0)     AS round_count,
+      IFNULL(w.round_rev_per_use, 0)  AS round_rev_per_use,
+      IFNULL(w.round_avg_hours, 0)    AS round_avg_hours,
+      IFNULL(w.oneway_count, 0)    AS oneway_count,
+      IFNULL(w.oneway_rev_per_use, 0) AS oneway_rev_per_use,
+      IFNULL(w.oneway_avg_hours, 0)   AS oneway_avg_hours,
+      IFNULL(w.d2d_count, 0)      AS d2d_count,
+      IFNULL(w.d2d_rev_per_use, 0)   AS d2d_rev_per_use,
+      IFNULL(w.d2d_avg_hours, 0)     AS d2d_avg_hours,
+      IFNULL(d.attempt, 0)        AS attempt,
+      IFNULL(d.fail_rate, 0)      AS fail_rate,
+      IFNULL(w.u_under1h, 0)     AS u_under1h,
+      IFNULL(w.u_1to4h, 0)       AS u_1to4h,
+      IFNULL(w.u_4to12h, 0)      AS u_4to12h,
+      IFNULL(w.u_over12h, 0)     AS u_over12h,
+      IFNULL(pay.payment_attempt, 0) AS payment_attempt
+    FROM perf p
+    LEFT JOIN util u USING (region1, region2_parent, region, isoyear, isoweek)
+    LEFT JOIN way  w USING (region1, region2_parent, region, isoyear, isoweek)
+    LEFT JOIN demand d USING (region1, region2_parent, region, isoyear, isoweek)
+    LEFT JOIN payment pay USING (region1, region2_parent, region, isoyear, isoweek)
+    WHERE p.region IS NOT NULL AND p.region != ''
+    ORDER BY p.region1, p.region2_parent, p.region, p.isoyear, p.isoweek
+    """
+    try:
+        rows = run_bq(sql, max_rows=50000)
+    except Exception as e:
+        print(f"  [경고] 지역별 실적 조회 실패 ({region_level}): {e}")
+        return {'weekly': []}
+    weekly = []
+    for r in rows:
+        weekly.append({
+            'region1':         r.get('region1', ''),
+            'region2_parent':  r.get('region2_parent') or '',
+            'region':          r.get('region', ''),
+            'isoyear':         int(r['isoyear']),
+            'isoweek':         int(r['isoweek']),
+            'period_type':     r['period_type'],
+            'car_count':       round(float(r.get('car_count') or 0), 1),
+            'zone_count':      int(float(r.get('zone_count') or 0)),
+            'revenue':         int(float(r.get('revenue') or 0)),
+            'profit':          int(float(r.get('profit') or 0)),
+            'gpm':             round(float(r.get('gpm') or 0), 4),
+            'rev_per_car':     round(float(r.get('rev_per_car') or 0)),
+            'use_count':       int(float(r.get('use_count') or 0)),
+            'opr_weekday':     round(float(r.get('opr_weekday') or 0), 4),
+            'opr_weekend':     round(float(r.get('opr_weekend') or 0), 4),
+            'discount_rate':   round(float(r.get('discount_rate') or 0), 4),
+            'round_count':     int(float(r.get('round_count') or 0)),
+            'round_rev_per_use': round(float(r.get('round_rev_per_use') or 0)),
+            'round_avg_hours': round(float(r.get('round_avg_hours') or 0), 1),
+            'oneway_count':    int(float(r.get('oneway_count') or 0)),
+            'oneway_rev_per_use': round(float(r.get('oneway_rev_per_use') or 0)),
+            'oneway_avg_hours': round(float(r.get('oneway_avg_hours') or 0), 1),
+            'd2d_count':       int(float(r.get('d2d_count') or 0)),
+            'd2d_rev_per_use': round(float(r.get('d2d_rev_per_use') or 0)),
+            'd2d_avg_hours':   round(float(r.get('d2d_avg_hours') or 0), 1),
+            'attempt':         int(float(r.get('attempt') or 0)),
+            'fail_rate':       round(float(r.get('fail_rate') or 0), 4),
+            'u_under1h':       int(float(r.get('u_under1h') or 0)),
+            'u_1to4h':         int(float(r.get('u_1to4h') or 0)),
+            'u_4to12h':        int(float(r.get('u_4to12h') or 0)),
+            'u_over12h':       int(float(r.get('u_over12h') or 0)),
+            'payment_attempt': int(float(r.get('payment_attempt') or 0)),
+        })
+    return {'weekly': weekly, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M')}
 
 
 def haversine_km(lat1, lng1, lat2, lng2):
@@ -1422,10 +1820,16 @@ def compute_gaps(access_data, reservation_data, zones_data, team_id='gyeonggi'):
 
     zone_coords = [(float(z['lat']), float(z['lng'])) for z in zones_data]
 
-    # 접속 >= 90(3개월 누적) & 반경 800m 내 존 없는 곳 → 월평균으로 변환
+    # 접속 >= 90(3개월 누적) & 반경 500m 내 존 없는 곳 → gap 후보 선정
     MIN_ACCESS = 90
     MIN_DIST_KM = 0.3 if team_id == 'seoul' else 0.5 if team_id == 'gyeonggi' else 0.8
+    RADIUS_KM = 0.5  # 수요 집계 반경 (시뮬레이션과 동일)
     num_months = 3
+
+    # 격자 좌표 리스트 (반경 집계용)
+    access_coords = [(float(k.split(',')[0]), float(k.split(',')[1]), v) for k, v in access_grid.items()]
+    res_coords = [(float(k.split(',')[0]), float(k.split(',')[1]), v) for k, v in res_grid.items()]
+
     gaps = []
     for key, access_count in access_grid.items():
         if access_count < MIN_ACCESS:
@@ -1435,11 +1839,13 @@ def compute_gaps(access_data, reservation_data, zones_data, team_id='gyeonggi'):
         # 팀별 최대 거리: 서울은 존 밀도 높으므로 3km, 나머지는 10km
         max_gap_dist = 3.0 if team_id == 'seoul' else 10.0
         if min_dist > MIN_DIST_KM and min_dist < max_gap_dist:
-            res_count = res_grid.get(key, 0)
+            # 반경 500m bbox 내 접속/예약 합산 (시뮬레이션과 동일 기준)
+            r500_access = sum(c for al, an, c in access_coords if haversine_km(lat, lng, al, an) <= RADIUS_KM)
+            r500_res = sum(c for rl, rn, c in res_coords if haversine_km(lat, lng, rl, rn) <= RADIUS_KM)
             gaps.append({
                 'lat': lat, 'lng': lng,
-                'access_count': round(access_count / num_months),
-                'reservation_count': round(res_count / num_months),
+                'access_count': round(r500_access / num_months),
+                'reservation_count': round(r500_res / num_months),
                 'nearest_zone_km': round(min_dist, 2)
             })
 
@@ -2477,7 +2883,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
 
 <div class="gap-panel" id="gapPanel">
     <h3>미진출 지역 분석</h3>
-    <div style="font-size:11px;color:#8b95a5;margin-bottom:8px;font-weight:500;">앱 접속 월평균 30건 이상, 반경 {'300m' if team_id == 'seoul' else '500m' if team_id == 'gyeonggi' else '800m'} 내 운영 존 없음</div>
+    <div style="font-size:11px;color:#8b95a5;margin-bottom:8px;font-weight:500;">반경 500m 수요 집계 기준 | 반경 {'300m' if team_id == 'seoul' else '500m' if team_id == 'gyeonggi' else '800m'} 내 운영 존 없음</div>
     <div id="gapRegionFilter" style="margin-bottom:10px;display:flex;align-items:center;gap:6px;{'display:none;' if len(TEAM_CONFIG[team_id]['regions']) <= 1 else ''}">
         <span style="font-size:11px;color:#8b95a5;font-weight:600;">지역</span>
         <select id="gapRegionSelect" style="padding:6px 12px;border-radius:8px;border:1px solid #e8eaed;background:#fff;color:#1a1a1a;font-size:12px;font-weight:600;">
@@ -4121,9 +4527,17 @@ def main(team_id='gyeonggi'):
     profit_data = query_zone_profit(team_id=team_id)
     print(f"       {len(profit_data)} 존 실적")
 
-    print("  5.1b/6 월별 실적 집계 (대시보드용)...")
+    print("  5.1b/6 주간 실적 집계 (대시보드용)...")
     dashboard_metrics = query_dashboard_metrics(team_id=team_id)
-    print(f"       {len(dashboard_metrics.get('monthly', []))} 개월 데이터")
+    print(f"       {len(dashboard_metrics.get('weekly', []))} 주 데이터")
+
+    print("  5.1c/6 지역별(region2) 실적 집계...")
+    dashboard_region2 = query_dashboard_by_region(team_id=team_id, region_level='region2')
+    print(f"       {len(dashboard_region2.get('weekly', []))} rows")
+
+    print("  5.1d/6 지역별(region3) 실적 집계...")
+    dashboard_region3 = query_dashboard_by_region(team_id=team_id, region_level='region3')
+    print(f"       {len(dashboard_region3.get('weekly', []))} rows")
 
     print("  5.2/6 그린카 존 현황 조회 (gcar_info_log)...")
     gcar_data = query_gcar_zones(team_id=team_id)
@@ -4186,7 +4600,9 @@ def main(team_id='gyeonggi'):
                        ("profit", profit_data), ("gcar", gcar_data),
                        ("closed", closed_data),
                        ("socar_supply", socar_supply), ("timeline", timeline_data),
-                       ("dashboard_metrics", dashboard_metrics)]:
+                       ("dashboard_metrics", dashboard_metrics),
+                       ("dashboard_region2", dashboard_region2),
+                       ("dashboard_region3", dashboard_region3)]:
         _save_cache(name, data, team_id=team_id)
 
     print("  HTML 생성...")

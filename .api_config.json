@@ -1,0 +1,5 @@
+{
+  "api_key": "sk-5Zq9NWQFT-1OSIPWGO1Fww",
+  "model": "dev/gpt-5.2-chat",
+  "gateway_url": "https://litellm.ai.socarcorp.co.kr/v1/chat/completions"
+}
