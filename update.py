@@ -3318,14 +3318,14 @@ dtodData.forEach(function(d) {{
 
 var gapLayer = L.layerGroup();
 gapsData.forEach(function(g) {{
-    var total = (g.access_count || 0) + (g.reservation_count || 0);
-    L.circleMarker([g.lat, g.lng], {{
-        radius: Math.max(6, Math.min(18, 5 + Math.log10(total + 1) * 2)),
-        fillColor: '#e74c3c', color: '#c0392b', weight: 2, opacity: 0.9, fillOpacity: 0.5
+    L.circle([g.lat, g.lng], {{
+        radius: 500,
+        fillColor: '#e74c3c', color: '#c0392b', weight: 1.5, opacity: 0.7, fillOpacity: 0.12
     }}).bindPopup(
         '<div class="popup-title">' + (g.name || '(' + g.lat + ', ' + g.lng + ')') + '</div>' +
-        '<div class="popup-row"><span class="popup-label">접속(월평균)</span><b>' + (g.access_count || 0).toLocaleString() + '</b></div>' +
-        '<div class="popup-row"><span class="popup-label">예약(월평균)</span><b>' + (g.reservation_count || 0).toLocaleString() + '</b></div>' +
+        '<div style="font-size:10px;color:#8b95a5;margin-bottom:4px;">반경 500m 내 수요 (월평균)</div>' +
+        '<div class="popup-row"><span class="popup-label">접속</span><b style="color:#0064FF">' + (g.access_count || 0).toLocaleString() + '</b></div>' +
+        '<div class="popup-row"><span class="popup-label">예약 생성</span><b style="color:#0064FF">' + (g.reservation_count || 0).toLocaleString() + '</b></div>' +
         '<div class="popup-row"><span class="popup-label">최근접 존</span><b>' + (g.nearest_zone_km || '-') + 'km</b></div>'
     ).addTo(gapLayer);
 }});
