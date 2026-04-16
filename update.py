@@ -1906,7 +1906,7 @@ def compute_reentry_zones(closed_data, access_data, reservation_data, zones_data
         key = (round(lat, 3), round(lng, 3))
         res_grid[key] = res_grid.get(key, 0) + int(r['reservation_count'])
 
-    RADIUS_KM = 1.0
+    RADIUS_KM = 0.5  # 반경 500m (미진출지역/시뮬레이션과 동일)
     num_months = 3
     results = []
     # 부적합 존 이름 제외
@@ -1930,7 +1930,7 @@ def compute_reentry_zones(closed_data, access_data, reservation_data, zones_data
         zlat, zlng = float(z['lat']), float(z['lng'])
         if active_zone_coords and any(haversine_km(zlat, zlng, al, an) <= 0.3 for al, an in active_zone_coords):
             continue
-        # 조건 4: 반경 1km 내 접속/예약 유저 존재
+        # 조건 4: 반경 500m 내 접속/예약 유저 존재
         nearby_access = 0
         nearby_res = 0
         for (glat, glng), cnt in access_grid.items():
@@ -2933,7 +2933,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
             <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">운영대수 &ge;1</span>
             <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">운영 30일+</span>
             <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">매출 &ge;160만/28일</span>
-            <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">주변접속 &ge;100/월</span>
+            <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">500m 접속 &ge;100/월</span>
             <span style="background:#f4f5f7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;">300m 내 운영존 없음</span>
         </div>
     </div>
@@ -3388,10 +3388,9 @@ if (gapRegionSelect) {{
 // 재진입 추천구역 레이어
 var reentryLayer = L.layerGroup();
 reentryData.forEach(function(z) {{
-    var demand = (z.nearby_access || 0) + (z.nearby_res || 0);
-    L.circleMarker([z.lat, z.lng], {{
-        radius: Math.max(8, Math.min(20, 6 + Math.log10(demand + 1) * 3)),
-        fillColor: '#ec407a', color: '#c2185b', weight: 2, opacity: 0.9, fillOpacity: 0.5
+    L.circle([z.lat, z.lng], {{
+        radius: 500,
+        fillColor: '#ec407a', color: '#c2185b', weight: 1.5, opacity: 0.7, fillOpacity: 0.12
     }}).bindPopup(
         '<div class="popup-title">' + z.zone_name + ' <span class="popup-badge" style="background:#ec407a">재진입 추천</span></div>' +
         '<div class="popup-row"><span class="popup-label">주차장</span><span>' + z.parking_name + '</span></div>' +
@@ -3400,9 +3399,9 @@ reentryData.forEach(function(z) {{
         (z.settlement_type ? '<div class="popup-row"><span class="popup-label">정산방식</span><span>' + z.settlement_type + '</span></div>' : '') +
         (z.price_per_car ? '<div class="popup-row"><span class="popup-label">대당 주차비</span><span><b>' + (z.price_per_car).toLocaleString() + '</b>원/월</span></div>' : '') +
         '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>' +
-        '<div style="font-size:10px;color:#8b95a5;font-weight:700;margin-bottom:4px;">주변 수요</div>' +
-        '<div class="popup-row"><span class="popup-label">접속/월</span><span><b style="color:#0064FF">' + (z.nearby_access||0).toLocaleString() + '</b></span></div>' +
-        '<div class="popup-row"><span class="popup-label">예약/월</span><span><b style="color:#0064FF">' + (z.nearby_res||0).toLocaleString() + '</b></span></div>' +
+        '<div style="font-size:10px;color:#8b95a5;font-weight:700;margin-bottom:4px;">반경 500m 내 수요 · 월평균 · {THREE_MONTHS_AGO}~{TODAY}</div>' +
+        '<div class="popup-row"><span class="popup-label">접속</span><span><b style="color:#0064FF">' + (z.nearby_access||0).toLocaleString() + '</b></span></div>' +
+        '<div class="popup-row"><span class="popup-label">예약 생성</span><span><b style="color:#0064FF">' + (z.nearby_res||0).toLocaleString() + '</b></span></div>' +
         '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>' +
         '<div style="font-size:10px;color:#8b95a5;font-weight:700;margin-bottom:4px;">과거 운영 실적</div>' +
         '<div class="popup-row"><span class="popup-label">운영대수</span><span><b>' + z.hist_car_count + '</b>대</span></div>' +
