@@ -182,30 +182,40 @@ body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-s
 @media(max-width:900px) { .chart-grid.cols2 { grid-template-columns:1fr; } }
 
 /* ─── Region breakdown ─── */
-.region-breakdown { background:#fff; border-radius:10px; box-shadow:0 1px 3px rgba(0,0,0,.07);
-                    margin-top:12px; overflow:hidden; }
-.region-breakdown-hdr { font-size:12px; font-weight:700; color:#374151; padding:12px 14px 10px;
-                         display:flex; align-items:center; gap:6px; border-bottom:1px solid #f3f4f6; }
+.region-breakdown { background:#fff; border-radius:12px; box-shadow:0 1px 4px rgba(0,0,0,.08);
+                    margin-top:14px; overflow:hidden; }
+.region-breakdown-hdr { font-size:13px; font-weight:700; color:#111827; padding:14px 16px 12px;
+                         display:flex; align-items:center; gap:7px; border-bottom:1px solid #f0f2f5;
+                         letter-spacing:-.01em; }
+.region-breakdown-hdr .hdr-sub { font-size:11px; font-weight:500; color:#9ca3af; margin-left:4px; }
 .region-table-wrap { overflow-x:auto; }
-.region-table { width:100%; border-collapse:collapse; font-size:11px; }
-.region-table th { background:#f8fafc; color:#6b7280; font-weight:600; padding:5px 8px;
-                   text-align:right; border-bottom:1px solid #e5e7eb; white-space:nowrap; }
+.region-table { width:100%; border-collapse:collapse; }
+.region-table th { background:#f8fafc; color:#6b7280; font-weight:600; padding:6px 8px;
+                   text-align:right; white-space:nowrap; font-size:10.5px; letter-spacing:-.01em; }
 .region-table th:first-child { text-align:left; position:sticky; left:0; background:#f8fafc; z-index:1; }
-.region-table th.grp { background:#f0f4ff; color:#3b5bdb; border-bottom:2px solid #c7d4ff;
-                        text-align:left; border-left:2px solid #c7d4ff; vertical-align:bottom; padding-bottom:4px; }
-.region-table th.sub-v { color:#374151; font-weight:700; }         /* W-1 값 헤더 */
-.region-table th.sub-c { color:#9ca3af; font-weight:500; font-size:10px; } /* WoW/YoY 헤더 */
-.region-table th.grp-sep { border-left:2px solid #c7d4ff; }       /* 그룹 첫 열 구분선 (헤더) */
-.region-table td { padding:5px 8px; text-align:right; border-bottom:1px solid #f3f4f6; white-space:nowrap; }
-.region-table td.grp-sep { border-left:2px solid #e0e7ff; }        /* 그룹 첫 열 구분선 (바디) */
-.region-table td.td-val { font-weight:600; color:#111827; }        /* W-1 값 */
-.region-table td.td-chg { font-size:10px; color:#9ca3af; min-width:44px; } /* WoW/YoY 기본색 */
+/* 그룹 레이블 행 */
+.region-table th.grp { background:#f0f4ff; color:#3b5bdb; border-bottom:1px solid #dbe4ff;
+                        text-align:center; border-left:2px solid #c5d3ff; vertical-align:middle;
+                        padding:7px 8px 6px; font-size:11px; font-weight:700; letter-spacing:-.01em; }
+/* 서브 헤더 행 */
+.region-table th.sub-v { color:#374151; font-weight:700; font-size:11px; min-width:68px; border-top:1px solid #dbe4ff; border-bottom:2px solid #e5e7eb; }
+.region-table th.grp-sep { border-left:2px solid #c5d3ff; }
+.region-table th.sub-c { color:#b0b9c8; font-weight:500; font-size:9.5px; min-width:38px;
+                          border-top:1px solid #dbe4ff; border-bottom:2px solid #e5e7eb; }
+/* 데이터 행 */
+.region-table td { padding:6px 8px; text-align:right; border-bottom:1px solid #f3f4f6; white-space:nowrap; font-size:11px; }
+.region-table td.grp-sep { border-left:2px solid #e8edff; }
+.region-table td.td-val { font-weight:700; color:#111827; font-size:11.5px; }
+.region-table td.td-chg { font-size:10px; color:#9ca3af; min-width:38px; }
 .region-table td:first-child { text-align:left; font-weight:700; color:#111827;
-                                position:sticky; left:0; background:#fff; z-index:1; cursor:pointer; }
+                                position:sticky; left:0; background:#fff; z-index:1; cursor:pointer;
+                                min-width:72px; max-width:120px; font-size:11.5px; padding-left:14px; }
 .region-table td:first-child:hover { color:#0064FF; text-decoration:underline; }
 .region-table tr:last-child td { border-bottom:none; }
-.region-table tr:hover td { background:#f8fafc; }
-.region-table tr:hover td:first-child { background:#f8fafc; }
+.region-table tr:nth-child(even) td { background:#fafbfd; }
+.region-table tr:nth-child(even) td:first-child { background:#fafbfd; }
+.region-table tr:hover td { background:#f0f4ff !important; }
+.region-table tr:hover td:first-child { background:#f0f4ff !important; }
 
 /* ─── Way Type 전용 ─── */
 .wt-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
@@ -225,6 +235,23 @@ body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-s
 .ut-pct { font-weight:700; color:#111827; }
 .ut-cnt { color:#6b7280; font-size:11px; }
 .ut-rpu { color:#9ca3af; font-size:10px; }
+.util-toggle { display:flex; gap:2px; background:#f0f2f5; border-radius:6px; padding:2px; }
+.util-toggle-btn { border:none; background:none; font-size:11px; font-weight:600; color:#6b7280;
+  padding:2px 9px; border-radius:4px; cursor:pointer; transition:.12s; }
+.util-toggle-btn.active { background:#fff; color:#3b82f6; box-shadow:0 1px 2px rgba(0,0,0,.1); }
+
+/* Way Type 토글 */
+.wt-toggle-bar { display:flex; gap:8px; margin-bottom:16px; }
+.wt-toggle-btn { border:2px solid transparent; border-radius:10px; padding:6px 22px;
+  font-size:13px; font-weight:700; cursor:pointer; transition:.15s; background:none; }
+.wt-toggle-btn:hover { opacity:.8; }
+
+/* Way Type KPI 행 */
+.wt-kpi-row { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:4px; }
+.wt-kpi { background:#f8fafc; border-radius:8px; padding:12px 14px; border-left:3px solid #0064FF; }
+.wt-kpi-lbl { font-size:11px; color:#6b7280; font-weight:500; margin-bottom:4px; }
+.wt-kpi-val { font-size:18px; font-weight:800; color:#111827; margin-bottom:4px; }
+.wt-kpi-chg { font-size:11px; display:flex; gap:6px; flex-wrap:wrap; }
 
 /* ─── No data ─── */
 .no-data { background:#fff; border-radius:10px; padding:40px; text-align:center;
@@ -325,19 +352,7 @@ body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-s
   <!-- AI Chat sidebar -->
   <div class="chat-sidebar" id="chatSidebar">
     <div class="chat-hdr">
-      <div class="chat-hdr-avatar">
-        <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <!-- car body -->
-          <rect x="2" y="9" width="18" height="7" rx="2" fill="white" opacity="0.9"/>
-          <!-- car roof -->
-          <path d="M5.5 9 L7 5.5 Q7.5 4.5 8.5 4.5 L13.5 4.5 Q14.5 4.5 15 5.5 L16.5 9Z" fill="white" opacity="0.7"/>
-          <!-- wheels -->
-          <circle cx="6.5" cy="16.5" r="2" fill="#0064FF" stroke="white" stroke-width="1.2"/>
-          <circle cx="15.5" cy="16.5" r="2" fill="#0064FF" stroke="white" stroke-width="1.2"/>
-          <!-- spark -->
-          <path d="M17 2 L15.5 5.5 L18 5 L16 8.5" stroke="white" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-        </svg>
-      </div>
+      <div class="chat-hdr-avatar" style="font-size:22px;display:flex;align-items:center;justify-content:center">🧑</div>
       <div style="flex:1">
         <div class="chat-hdr-title">소라</div>
         <div class="chat-status" id="chatStatus">로딩 중...</div>
@@ -346,7 +361,7 @@ body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-s
     </div>
     <div class="chat-messages" id="chatMessages">
       <div class="chat-empty">
-        <div class="chat-empty-icon">🚗</div>
+        <div class="chat-empty-icon">💬</div>
         <div>아래 버튼을 클릭하거나<br>직접 질문을 입력하세요</div>
       </div>
     </div>
@@ -359,7 +374,7 @@ body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-s
     </div>
     <div class="chat-input-area" id="chatInputArea">
       <textarea class="chat-input" id="chatInput" placeholder="분석 요청 또는 질문을 입력하세요..." rows="1"
-        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();sendChat()}"
         oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px'"></textarea>
       <button class="chat-send" id="chatSendBtn" onclick="sendChat()">전송</button>
     </div>
@@ -403,7 +418,7 @@ const METRICS = {
       { keys:['rev_per_car'], label:'대당매출 (원)', fmt:'krw',    colors:['#0064FF'] },
       { keys:['gpm'],         label:'GPM (%)',        fmt:'pct100', colors:['#10b981'] },
       { keys:['revenue'],     label:'총매출 (원)',    fmt:'krw',    colors:['#6366f1'] },
-      { keys:['opr_weekday','opr_weekend'], label:'가동률 (%)', fmt:'pct100', colors:['#3b82f6','#f59e0b'] },
+      { keys:['opr_weekday'], label:'가동률 (%)', fmt:'pct100', colors:['#3b82f6'], utilToggle:true },
     ],
   },
   waytype: {
@@ -497,6 +512,7 @@ function aggregateByWeek(rows) {
         u_0to4h:0, u_4to8h:0, u_8to24h:0, u_24plus:0,
         u_0to4h_rev:0, u_4to8h_rev:0, u_8to24h_rev:0, u_24plus_rev:0,
         payment_attempt:0,
+        _dc_w:0, _dc_n:0,
       };
     }
     const m = map[k];
@@ -537,6 +553,10 @@ function aggregateByWeek(rows) {
     // 가동률 — car_count 가중 평균
     m._opr_wd_w += (r.opr_weekday || 0) * cc;  m._opr_wd_n += cc;
     m._opr_we_w += (r.opr_weekend || 0) * cc;  m._opr_we_n += cc;
+    // 할인율 — use_count 가중 평균
+    const uc = r.use_count || 0;
+    m._dc_w += (r.discount_rate || 0) * uc;
+    m._dc_n += uc;
   }
   return Object.values(map).map(m => ({
     ...m,
@@ -551,7 +571,7 @@ function aggregateByWeek(rows) {
     oneway_avg_hours:   m.oneway_count ? m._oneway_utime / m.oneway_count : 0,
     d2d_rev_per_use:    m.d2d_count    ? m._d2d_rev    / m.d2d_count    : 0,
     d2d_avg_hours:      m.d2d_count    ? m._d2d_utime  / m.d2d_count    : 0,
-    discount_rate: 0,
+    discount_rate: m._dc_n ? m._dc_w / m._dc_n : 0,
   })).sort((a,b) => a.isoyear - b.isoyear || a.isoweek - b.isoweek);
 }
 
@@ -581,10 +601,26 @@ function getDatasets() {
     const yoyAligned = mNow.map(m=>yoyMap[m._k.slice(5)]||null);
     return { labels, now:mNow, yoy:yoyAligned, labelNow:'2026', labelYoy:'2025' };
   }
-  // YTD
+  // YTD — 실적(W1~W-1) + 미래 참고(W~W+4, YoY만)
   const yoyMap = Object.fromEntries(yoy.map(w=>[w.isoweek, w]));
-  const yoyAligned = now.map(w=>yoyMap[w.isoweek]||null);
-  return { labels: now.map(w=>`W${w.isoweek}`), now, yoy: yoyAligned, labelNow:'2026', labelYoy:'2025' };
+  const yoyAligned = now.map(w => yoyMap[w.isoweek] || null);
+
+  // 마지막 실적 주차 다음부터 +4주까지 YoY 참고 구간 추가
+  const lastWeek = now.at(-1)?.isoweek ?? 0;
+  const futureWeeks = [1, 2, 3, 4, 5].map(i => lastWeek + i)
+    .filter(w => yoyMap[w]);                       // 캐시에 있는 주차만
+  const futureNulls = futureWeeks.map(() => null);  // 2026 실적 없음
+  const futureYoy   = futureWeeks.map(w => yoyMap[w]);
+
+  const extLabels = [
+    ...now.map(w => `W${w.isoweek}`),
+    ...futureWeeks.map(w => `W${w} *`),             // * = YoY 참고
+  ];
+  const extNow = [...now, ...futureNulls];
+  const extYoy = [...yoyAligned, ...futureYoy];
+
+  return { labels: extLabels, now: extNow, yoy: extYoy,
+           labelNow:'2026', labelYoy:'2025', futureFrom: now.length };
 }
 
 const SUM_KEYS = ['revenue','profit','use_count','attempt',
@@ -643,6 +679,9 @@ function pctChg(cur, prev) {
   if (!prev || !cur) return null;
   return (cur - prev) / Math.abs(prev) * 100;
 }
+function periodChgLabel() {
+  return period === 'monthly' ? 'MoM ' : 'WoW ';
+}
 function badgeHtml(chg, prefix) {
   if (chg == null) return '';
   const dir = chg > 0.5 ? 'up' : chg < -0.5 ? 'dn' : 'flat';
@@ -677,14 +716,16 @@ function render() {
 
   const ds  = getDatasets();
   const mg  = METRICS[metric];
-  const W1  = ds.now.at(-1);
-  const W2  = ds.now.at(-2);
-  const Y1  = ds.yoy.at(-1);
+  // futureFrom이 있으면 (YTD 미래 연장) 마지막 실제 데이터 사용
+  const _lastRealIdx = ds.futureFrom != null ? ds.futureFrom - 1 : ds.now.length - 1;
+  const W1  = ds.now[_lastRealIdx] ?? null;
+  const W2  = ds.now[_lastRealIdx - 1] ?? null;
+  const Y1  = ds.yoy[_lastRealIdx] ?? null;
 
   let note = '';
   if (period==='weekly')  note = 'W-4 ~ W-1 기준 · WoW: 전주 대비 · YoY: 전년 동기 대비';
   if (period==='monthly') note = '월별 집계 (ISOWEEK 기준) · YoY: 전년 동월 대비';
-  if (period==='ytd')     note = '연초 (W1) 부터 W-1 까지 주차별 추이 · 2025년 동기 비교';
+  if (period==='ytd')     note = '연초 (W1) 부터 W-1 까지 주차별 추이 · 이후 W~W+4는 2025년 동기 참고값 (음영)';
   if (region) note = `[${region}] ` + note;
 
   // KPI cards
@@ -698,7 +739,7 @@ function render() {
       <div class="kpi-lbl">${k.label}</div>
       <div class="kpi-val">${fmt(cur,k.fmt)}<span class="kpi-unit">${k.unit}</span></div>
       <div class="badge-row">
-        ${badgeHtml(wow,'WoW ')}${badgeHtml(yoyc,'YoY ')}
+        ${badgeHtml(wow,periodChgLabel())}${badgeHtml(yoyc,'YoY ')}
       </div>
     </div>`;
   }).join('');
@@ -718,16 +759,22 @@ function render() {
 
   // Standard chart renderer
   const chartCols = mg.charts.length >= 2 ? 'cols2' : 'cols1';
-  const chartsHtml = mg.charts.map((c,i) =>
-    `<div class="chart-card">
-      <div class="chart-hdr">
+  const chartsHtml = mg.charts.map((c,i) => {
+    const toggleHtml = c.utilToggle ? `
+      <div class="util-toggle">
+        <button class="util-toggle-btn active" id="utilBtn_wd_${i}" onclick="switchUtil(${i},'weekday',this)">주중</button>
+        <button class="util-toggle-btn" id="utilBtn_we_${i}" onclick="switchUtil(${i},'weekend',this)">주말</button>
+      </div>` : '';
+    return `<div class="chart-card">
+      <div class="chart-hdr" style="display:flex;align-items:center;gap:6px">
         <div class="chart-dot" style="background:${c.colors[0]}"></div>
-        ${c.label}
+        <span style="flex:1">${c.label}</span>
+        ${toggleHtml}
       </div>
       <div class="chart-wrap"><canvas id="ch${i}"></canvas></div>
       <div class="data-table-wrap">${buildTable(c, ds, i)}</div>
-    </div>`
-  ).join('');
+    </div>`;
+  }).join('');
 
   // Region breakdown section
   let regionBreakdownHtml = '';
@@ -760,7 +807,7 @@ function buildTable(cfg, ds, chartIdx) {
     ${key1 ? `<th>2026 (${keyLabel(key1)})</th>` : ''}
     <th>2025 (YoY)</th>
     ${key1 ? `<th>2025 (${keyLabel(key1)})</th>` : ''}
-    <th>WoW</th>
+    <th>${period==='monthly'?'MoM':'WoW'}</th>
     <th>YoY</th>
   </tr>`;
 
@@ -801,20 +848,60 @@ function chgCell(v, vbase, isFirst) {
 }
 
 function buildRegionTable(rows, title, onClickFn) {
-  const cols = [
-    { key: 'rev_per_car', label: '대당매출', fmt: 'krw', suffix: '원' },
-    { key: 'gpm',         label: 'GPM',      fmt: 'pct', suffix: '' },
-    { key: 'use_count',   label: '이용건수', fmt: 'cnt', suffix: '건' },
-    { key: 'revenue',     label: '총매출',   fmt: 'krw', suffix: '원' },
-  ];
+  const colsByMetric = {
+    revenue: [
+      { key:'rev_per_car',  label:'대당매출',   fmt:'krw', suffix:'원' },
+      { key:'gpm',          label:'GPM',         fmt:'pct', suffix:'' },
+      { key:'opr_weekday',  label:'주중가동률',  fmt:'pct', suffix:'' },
+      { key:'opr_weekend',  label:'주말가동률',  fmt:'pct', suffix:'' },
+      { key:'use_count',    label:'이용건수',    fmt:'cnt', suffix:'건' },
+      { key:'revenue',      label:'총매출',      fmt:'krw', suffix:'원' },
+    ],
+    waytype: [
+      { key:'round_count',  label:'왕복', fmt:'cnt', suffix:'건' },
+      { key:'oneway_count', label:'편도', fmt:'cnt', suffix:'건' },
+      { key:'d2d_count',    label:'부름', fmt:'cnt', suffix:'건' },
+      { key:'use_count',    label:'총이용', fmt:'cnt', suffix:'건' },
+      // 이용구간 비율 — simple: 단일 컬럼, WoW/YoY 없음
+      { label:'0~4h', type:'simple', color:'#93c5fd',
+        valueFn: r => { const t=(r?.u_0to4h||0)+(r?.u_4to8h||0)+(r?.u_8to24h||0)+(r?.u_24plus||0); return t?`${Math.round((r?.u_0to4h||0)/t*100)}%`:'-'; } },
+      { label:'4~8h', type:'simple', color:'#3b82f6',
+        valueFn: r => { const t=(r?.u_0to4h||0)+(r?.u_4to8h||0)+(r?.u_8to24h||0)+(r?.u_24plus||0); return t?`${Math.round((r?.u_4to8h||0)/t*100)}%`:'-'; } },
+      { label:'8~24h', type:'simple', color:'#6d28d9',
+        valueFn: r => { const t=(r?.u_0to4h||0)+(r?.u_4to8h||0)+(r?.u_8to24h||0)+(r?.u_24plus||0); return t?`${Math.round((r?.u_8to24h||0)/t*100)}%`:'-'; } },
+      { label:'24h+', type:'simple', color:'#1e3a8a',
+        valueFn: r => { const t=(r?.u_0to4h||0)+(r?.u_4to8h||0)+(r?.u_8to24h||0)+(r?.u_24plus||0); return t?`${Math.round((r?.u_24plus||0)/t*100)}%`:'-'; } },
+    ],
+    demand: [
+      { key:'attempt',         label:'수요접속', fmt:'cnt', suffix:'건' },
+      { key:'fail_rate',       label:'실패율',   fmt:'pct', suffix:'' },
+      { key:'payment_attempt', label:'결제시도', fmt:'cnt', suffix:'건' },
+      { key:'use_count',       label:'이용건수', fmt:'cnt', suffix:'건' },
+    ],
+    cost: [
+      { key:'discount_rate', label:'할인율',   fmt:'pct', suffix:'' },
+      { key:'use_count',     label:'이용건수', fmt:'cnt', suffix:'건' },
+      { key:'rev_per_car',   label:'대당매출', fmt:'krw', suffix:'원' },
+      { key:'revenue',       label:'총매출',   fmt:'krw', suffix:'원' },
+    ],
+  };
+  const cols = colsByMetric[metric] || colsByMetric.revenue;
+  const chgLbl = period === 'monthly' ? 'MoM' : 'WoW';
 
   const thead = `<thead>
     <tr>
-      <th rowspan="2" style="text-align:left;vertical-align:middle;min-width:80px">지역</th>
-      ${cols.map(c => `<th class="grp" colspan="3">${c.label}</th>`).join('')}
+      <th style="background:#f8fafc;border-bottom:none"></th>
+      ${cols.map(c => c.type === 'simple'
+        ? `<th class="grp" colspan="1" style="color:${c.color||'#374151'}">${c.label}</th>`
+        : `<th class="grp" colspan="3">${c.label}</th>`
+      ).join('')}
     </tr>
     <tr>
-      ${cols.map(() => `<th class="grp-sep sub-v">W-1</th><th class="sub-c">WoW</th><th class="sub-c">YoY</th>`).join('')}
+      <th style="text-align:left;position:sticky;left:0;background:#f8fafc;min-width:72px;z-index:1">지역</th>
+      ${cols.map(c => c.type === 'simple'
+        ? `<th class="grp-sep sub-v" style="min-width:36px;text-align:center">비율</th>`
+        : `<th class="grp-sep sub-v">최근</th><th class="sub-c">${chgLbl}</th><th class="sub-c">YoY</th>`
+      ).join('')}
     </tr>
   </thead>`;
 
@@ -824,6 +911,10 @@ function buildRegionTable(rows, title, onClickFn) {
       ? `<td onclick="${onClickFn}('${name}')">${name}</td>`
       : `<td style="cursor:default">${name}</td>`;
     const dataCells = cols.map(c => {
+      if (c.type === 'simple') {
+        const valStr = c.valueFn ? c.valueFn(cur) : '-';
+        return `<td class="td-val grp-sep" style="text-align:center;color:${c.color||'#111827'};font-size:10.5px">${valStr}</td>`;
+      }
       const v  = cur  ? cur[c.key]  : null;
       const vp = prev ? prev[c.key] : null;
       const vy = yoy  ? yoy[c.key]  : null;
@@ -833,8 +924,13 @@ function buildRegionTable(rows, title, onClickFn) {
     return `<tr>${nameCell}${dataCells}</tr>`;
   }).join('');
 
+  const isClickable = onClickFn !== '';
   return `<div class="region-breakdown">
-    <div class="region-breakdown-hdr">📍 ${title}</div>
+    <div class="region-breakdown-hdr">
+      <span style="color:#0064FF;font-size:14px">▪</span>
+      ${title}
+      ${isClickable ? '<span class="hdr-sub">· 지역명 클릭 시 하위 상세</span>' : ''}
+    </div>
     <div class="region-table-wrap">
       <table class="region-table">${thead}<tbody>${tbody}</tbody></table>
     </div>
@@ -880,7 +976,7 @@ function buildRegionBreakdown(ds) {
     clickable: true,
   }));
 
-  const title = regionLevel === 0 ? 'Region2 별 W-1 현황 (클릭 시 상세)' : `${region} · Region2 별 W-1 현황`;
+  const title = regionLevel === 0 ? '시군구별 현황' : `${region} 시군구별 현황`;
   return buildRegionTable(rows, title, 'drillRegion2');
 }
 
@@ -891,7 +987,7 @@ function drillRegion2(name) {
 function buildRegion3Breakdown() {
   const r3data = D.weekly_region3 || [];
   const filtered = r3data.filter(r => r.region2_parent === region);
-  if (!filtered.length) return `<div class="region-breakdown"><div class="region-breakdown-hdr">📍 ${region} · Region3 현황</div><div style="color:#9ca3af;font-size:12px;padding:12px">region3 데이터 없음. 업데이트 필요.</div></div>`;
+  if (!filtered.length) return `<div class="region-breakdown"><div class="region-breakdown-hdr">📍 ${region} 읍면동별 현황</div><div style="color:#9ca3af;font-size:12px;padding:12px">region3 데이터 없음. 업데이트 필요.</div></div>`;
 
   const now3 = filtered.filter(r => r.period_type === 'now');
   const yoy3 = filtered.filter(r => r.period_type === 'yoy');
@@ -919,7 +1015,7 @@ function buildRegion3Breakdown() {
     clickable: false,
   }));
 
-  return buildRegionTable(rows, `${region} · Region3 별 W-1 현황`, '');
+  return buildRegionTable(rows, `${region} 읍면동별 현황`, '');
 }
 
 /* ═══════════════════════════════════════════
@@ -990,10 +1086,20 @@ function drawChart(id, cfg, ds) {
     });
   });
 
+  // Y축 범위: 모든 데이터(2026+2025) 최솟값~최댓값 기준, 10% 여백
+  const allVals = datasets.flatMap(d => d.data).filter(v => v != null && isFinite(v));
+  const yMin = allVals.length ? Math.min(...allVals) : 0;
+  const yMax = allVals.length ? Math.max(...allVals) : 1;
+  const yPad = (yMax - yMin) * 0.15 || yMax * 0.1 || 1;
+  const ySugMin = yMin - yPad;
+  const ySugMax = yMax + yPad;
+
   const scalesOpt = {
     x: { ticks: { font: { size: 10 } } },
     y: {
       position: 'left',
+      suggestedMin: ySugMin,
+      suggestedMax: ySugMax,
       ticks: { font: { size: 10 }, callback: v => fmtAxis(v, cfg.fmt) },
     },
   };
@@ -1005,9 +1111,40 @@ function drawChart(id, cfg, ds) {
     };
   }
 
+  // YTD 미래 참고 구간 음영 플러그인
+  const futureFrom = isYtd && ds.futureFrom != null ? ds.futureFrom : null;
+  const ytdShadePlugin = futureFrom != null ? [{
+    id: 'ytdShade',
+    afterDraw(chart) {
+      const { ctx: c, chartArea: { top, bottom, left, right }, scales: { x } } = chart;
+      if (!x || futureFrom >= chart.data.labels.length) return;
+      const xStart = x.getPixelForValue(futureFrom);
+      if (xStart >= right) return;
+      c.save();
+      c.fillStyle = 'rgba(148,163,184,0.10)';
+      c.fillRect(xStart, top, right - xStart, bottom - top);
+      // 구분선
+      c.beginPath();
+      c.strokeStyle = 'rgba(148,163,184,0.5)';
+      c.setLineDash([4, 3]);
+      c.lineWidth = 1;
+      c.moveTo(xStart, top);
+      c.lineTo(xStart, bottom);
+      c.stroke();
+      c.setLineDash([]);
+      // 레이블
+      c.font = '9px sans-serif';
+      c.fillStyle = 'rgba(100,116,139,0.85)';
+      c.textAlign = 'left';
+      c.fillText('YoY 참고', xStart + 4, top + 10);
+      c.restore();
+    }
+  }] : [];
+
   const instance = new Chart(ctx, {
     type: 'line',
     data: { labels: ds.labels, datasets },
+    plugins: ytdShadePlugin,
     options: {
       responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
       layout: { padding: { top: 24 } },
@@ -1035,193 +1172,428 @@ function destroyCharts() { charts.forEach(c => c.destroy()); charts = []; }
 /* ═══════════════════════════════════════════
    Way Type 분석 전용 렌더러
 ═══════════════════════════════════════════ */
-function renderWaytype(ds) {
-  const ways = [
-    { key:'round',  label:'왕복', color:'#0064FF',
-      count:'round_count', rev:'round_rev_per_use', hours:'round_avg_hours' },
-    { key:'oneway', label:'편도', color:'#8b5cf6',
-      count:'oneway_count', rev:'oneway_rev_per_use', hours:'oneway_avg_hours' },
-    { key:'d2d',    label:'부름', color:'#ec4899',
-      count:'d2d_count', rev:'d2d_rev_per_use', hours:'d2d_avg_hours' },
-  ];
+const WT_DEFS = [
+  { key:'round',  label:'왕복', color:'#0064FF',
+    count:'round_count',  rev:'round_rev_per_use',  hours:'round_avg_hours' },
+  { key:'oneway', label:'편도', color:'#8b5cf6',
+    count:'oneway_count', rev:'oneway_rev_per_use', hours:'oneway_avg_hours' },
+  { key:'d2d',    label:'부름', color:'#ec4899',
+    count:'d2d_count',    rev:'d2d_rev_per_use',   hours:'d2d_avg_hours' },
+];
+let _wayMode = 'round';
+let _utMetric = 'cnt';  // YTD 이용구간 토글: 'cnt' | 'rpu' | 'rev'
 
-  const W1 = ds.now.at(-1), W2 = ds.now.at(-2), Y1 = ds.yoy.at(-1);
+function switchUtMetric(key) {
+  _utMetric = key;
+  // 토글 버튼 스타일 갱신
+  ['cnt','rpu','rev'].forEach(k => {
+    const btn = document.getElementById('utBtn_' + k);
+    if (btn) { btn.classList.toggle('active', k === key); }
+  });
+  // 차트만 교체
+  const ds = getDatasets();
+  const cutIdx = ds.futureFrom != null ? ds.futureFrom : ds.now.length;
+  const nows = ds.now.slice(0, cutIdx);
+  const lbls = ds.labels.slice(0, cutIdx);
+  const utCountKeys = ['u_0to4h','u_4to8h','u_8to24h','u_24plus'];
+  const utRevKeys   = ['u_0to4h_rev','u_4to8h_rev','u_8to24h_rev','u_24plus_rev'];
+  const utBucketLabels = ['0~4h','4~8h','8~24h','24h+'];
+  const utBucketColors = ['#93c5fd','#3b82f6','#6d28d9','#1e3a8a'];
+  const fmtKeys = { cnt:'cnt', rpu:'krw', rev:'krw' };
+  const valsFns = {
+    cnt: (r, ck)     => r?.[ck] ?? null,
+    rpu: (r, ck, rk) => { const c=r?.[ck]||0,v=r?.[rk]||0; return c>0?Math.round(v/c):null; },
+    rev: (r, ck, rk) => r?.[rk] ?? null,
+  };
+  const fn = valsFns[key], fmtKey = fmtKeys[key];
+  const ctx = document.getElementById('ut_ytd_ch');
+  if (!ctx) return;
+  const ex = charts.find(c => c.canvas?.id === 'ut_ytd_ch');
+  if (ex) { ex.destroy(); charts.splice(charts.indexOf(ex), 1); }
+  const datasets = utCountKeys.map((ck, i) => {
+    const rk = utRevKeys[i];
+    const data = nows.map(r => fn(r, ck, rk));
+    return {
+      label: utBucketLabels[i], data,
+      borderColor: utBucketColors[i], backgroundColor:'transparent',
+      fill:false, tension:.25, pointRadius:4, pointHoverRadius:6, borderWidth:2.2,
+      datalabels:{ anchor:'top', align:'top', offset:2, font:{size:8,weight:'bold'}, color:utBucketColors[i],
+        formatter: v => v==null?'':fmtAxis(v,fmtKey) },
+    };
+  });
+  const allV = datasets.flatMap(d=>d.data).filter(v=>v!=null&&isFinite(v));
+  const mn=allV.length?Math.min(...allV):0, mx=allV.length?Math.max(...allV):1, p=(mx-mn)*.15||mx*.1||1;
+  const inst = new Chart(ctx, {
+    type:'line', data:{ labels:lbls, datasets },
+    options:{ responsive:true, maintainAspectRatio:false, layout:{padding:{top:20}},
+      plugins:{ legend:{labels:{font:{size:10},boxWidth:10,usePointStyle:true}}, datalabels:{} },
+      scales:{ x:{ticks:{font:{size:10}}}, y:{suggestedMin:mn-p,suggestedMax:mx+p,ticks:{font:{size:10},callback:v=>fmtAxis(v,fmtKey)}} },
+    },
+  });
+  charts.push(inst);
+}
 
-  // utime bucket 데이터
-  const utBuckets = ['u_0to4h','u_4to8h','u_8to24h','u_24plus'];
+function switchWayType(key) {
+  _wayMode = key;
+  const ds = getDatasets();
+  // 토글 버튼 상태 갱신
+  document.querySelectorAll('.wt-toggle-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.key === key);
+    const wDef = WT_DEFS.find(w => w.key === b.dataset.key);
+    b.style.borderColor   = b.dataset.key === key ? wDef.color : 'transparent';
+    b.style.color         = b.dataset.key === key ? wDef.color : '#6b7280';
+    b.style.background    = b.dataset.key === key ? wDef.color + '12' : 'none';
+  });
+  // 내용만 교체
+  document.getElementById('wtContent').innerHTML = buildWtContent(ds);
+  renderWaytypeCharts(ds);
+}
+
+function buildWtContent(ds) {
+  const w   = WT_DEFS.find(d => d.key === _wayMode);
+  const _li = ds.futureFrom != null ? ds.futureFrom - 1 : ds.now.length - 1;
+  const W1  = ds.now[_li] ?? null, W2 = ds.now[_li - 1] ?? null, Y1 = ds.yoy[_li] ?? null;
+
+  const cur  = W1?.[w.count]  ?? null;
+  const prev = W2?.[w.count]  ?? null;
+  const yoyv = Y1?.[w.count]  ?? null;
+  const rev  = W1?.[w.rev]    ?? null;
+  const hrs  = W1?.[w.hours]  ?? null;
+  const rph  = (rev && hrs > 0) ? Math.round(rev / hrs) : null;
+  const wowC = pctChg(cur, prev), yoyC = pctChg(cur, yoyv);
+
+  const momLabel = periodChgLabel().trim();
+  const chgBadge = (v) => v == null ? '' :
+    `<span style="font-size:11px;color:${v>0?'#166534':'#991b1b'}">${momLabel} ${v>0?'+':''}${v.toFixed(1)}%</span>`;
+  const yoyBadge = v => v == null ? '' :
+    `<span style="font-size:11px;color:#9ca3af">YoY ${v>0?'+':''}${v.toFixed(1)}%</span>`;
+
+  // KPI 4개
+  const kpiRow = `
+    <div class="wt-kpi-row">
+      <div class="wt-kpi" style="border-left:3px solid ${w.color}">
+        <div class="wt-kpi-lbl">이용건수</div>
+        <div class="wt-kpi-val">${fmt(cur,'cnt')}건</div>
+        <div class="wt-kpi-chg">${chgBadge(wowC,'WoW')} ${yoyBadge(yoyC)}</div>
+      </div>
+      <div class="wt-kpi" style="border-left:3px solid ${w.color}">
+        <div class="wt-kpi-lbl">건당 매출</div>
+        <div class="wt-kpi-val">${fmt(rev,'krw')}원</div>
+        <div class="wt-kpi-chg">${chgBadge(pctChg(rev, W2?.[w.rev]))} ${yoyBadge(pctChg(rev, Y1?.[w.rev]))}</div>
+      </div>
+      <div class="wt-kpi" style="border-left:3px solid ${w.color}">
+        <div class="wt-kpi-lbl">시간당 매출</div>
+        <div class="wt-kpi-val">${rph != null ? fmt(rph,'krw')+'원/h' : '-'}</div>
+        <div class="wt-kpi-chg">${(() => {
+          const rph2 = (W2?.[w.rev] && W2?.[w.hours] > 0) ? Math.round(W2[w.rev] / W2[w.hours]) : null;
+          const rphY = (Y1?.[w.rev] && Y1?.[w.hours] > 0) ? Math.round(Y1[w.rev] / Y1[w.hours]) : null;
+          return chgBadge(pctChg(rph, rph2)) + ' ' + yoyBadge(pctChg(rph, rphY));
+        })()}</div>
+      </div>
+      <div class="wt-kpi" style="border-left:3px solid ${w.color}">
+        <div class="wt-kpi-lbl">평균 이용시간</div>
+        <div class="wt-kpi-val">${fmt(hrs,'hr')}h</div>
+        <div class="wt-kpi-chg">${chgBadge(pctChg(hrs, W2?.[w.hours]))} ${yoyBadge(pctChg(hrs, Y1?.[w.hours]))}</div>
+      </div>
+    </div>`;
+
+  // 이용 구간 분포 (최근 기준)
+  const utKeys    = ['u_0to4h','u_4to8h','u_8to24h','u_24plus'];
   const utRevKeys = ['u_0to4h_rev','u_4to8h_rev','u_8to24h_rev','u_24plus_rev'];
   const utLabels  = ['0~4h','4~8h','8~24h','24h+'];
-  const utColors  = ['#bfdbfe','#60a5fa','#2563eb','#1e3a8a'];
-  const utTotal   = utBuckets.reduce((s,k) => s + (W1?.[k]||0), 0);
+  const utColors  = ['#93c5fd','#3b82f6','#6d28d9','#1e3a8a'];
+  const utTotal   = utKeys.reduce((s,k) => s + (W1?.[k]||0), 0);
+  const distBars = utTotal > 0 ? utKeys.map((k,i) => {
+    const v = W1?.[k]||0, pct = v/utTotal*100;
+    return `<div style="display:grid;grid-template-columns:40px 1fr 48px 64px;align-items:center;gap:8px;font-size:11px;padding:3px 0">
+      <span style="display:flex;align-items:center;gap:5px">
+        <span style="width:9px;height:9px;border-radius:2px;background:${utColors[i]};flex-shrink:0;display:inline-block"></span>
+        <span style="font-weight:600;color:#374151">${utLabels[i]}</span>
+      </span>
+      <div style="background:#f1f5f9;border-radius:3px;height:7px;overflow:hidden">
+        <div style="background:${utColors[i]};width:${pct.toFixed(1)}%;height:100%;border-radius:3px"></div>
+      </div>
+      <span style="font-weight:700;color:#111827;text-align:right">${pct.toFixed(1)}%</span>
+      <span style="color:#6b7280;text-align:right">${fmt(v,'cnt')}건</span>
+    </div>`;
+  }).join('') : '<span style="color:#9ca3af;font-size:12px">데이터 없음</span>';
 
-  // Way Type 비교 섹션
-  const wayCols = ways.map(w => {
-    const cur  = W1 ? W1[w.count] : null;
-    const prev = W2 ? W2[w.count] : null;
-    const yoyv = Y1 ? Y1[w.count] : null;
-    const rev  = W1 ? W1[w.rev]   : null;
-    const hrs  = W1 ? W1[w.hours] : null;
-    const rph  = (rev && hrs && hrs > 0) ? Math.round(rev / hrs) : null;
-    const wowC = pctChg(cur, prev), yoyC = pctChg(cur, yoyv);
-    return `<div class="wt-col">
-      <div class="wt-col-hdr" style="border-top:3px solid ${w.color}">${w.label}</div>
-      <div class="wt-metric"><span class="wt-lbl">이용건수</span>
-        <span class="wt-val">${fmt(cur,'cnt')}건</span>
-        <span class="wt-chg">${wowC!=null?`<span style="color:${wowC>0?'#166534':'#991b1b'}">${wowC>0?'+':''}${wowC.toFixed(1)}%</span>`:''} ${yoyC!=null?`<span style="color:#9ca3af">YoY ${yoyC>0?'+':''}${yoyC.toFixed(1)}%</span>`:''}</span>
-      </div>
-      <div class="wt-metric"><span class="wt-lbl">건당 매출</span>
-        <span class="wt-val">${fmt(rev,'krw')}원</span>
-      </div>
-      <div class="wt-metric"><span class="wt-lbl">시간당 매출</span>
-        <span class="wt-val">${rph!=null?fmt(rph,'krw')+'원/h':'-'}</span>
-      </div>
-      <div class="wt-metric"><span class="wt-lbl">평균 이용시간</span>
-        <span class="wt-val">${fmt(hrs,'hr')}h</span>
+  // 이용 구간 추이 차트 섹션 (Weekly/Monthly: 3개 차트, YTD: 토글+1개)
+  const isYtdMode = period === 'ytd';
+  // 4개 소형 차트 행 빌더
+  const utBucketRow = (metricKey, title) => `
+    <div class="chart-card" style="margin-top:10px">
+      <div class="chart-hdr">${title}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 10px 10px">
+        ${utLabels.map((lbl,i) => `
+          <div>
+            <div style="font-size:10px;font-weight:600;color:${utColors[i]};margin-bottom:4px;text-align:center">${lbl}</div>
+            <div style="height:130px;position:relative"><canvas id="ut_${metricKey}_${i}"></canvas></div>
+          </div>`).join('')}
       </div>
     </div>`;
+
+  const utTrendSection = isYtdMode ? `
+    <div class="chart-card" style="margin-top:12px">
+      <div class="chart-hdr" style="display:flex;align-items:center;gap:10px">
+        <span>이용 구간별 추이</span>
+        <div style="display:flex;gap:4px;margin-left:auto">
+          <button id="utBtn_cnt" class="util-toggle-btn active" onclick="switchUtMetric('cnt')">이용건수</button>
+          <button id="utBtn_rpu" class="util-toggle-btn" onclick="switchUtMetric('rpu')">건당 매출</button>
+          <button id="utBtn_rev" class="util-toggle-btn" onclick="switchUtMetric('rev')">총 매출</button>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:280px"><canvas id="ut_ytd_ch"></canvas></div>
+    </div>` :
+    utBucketRow('cnt','이용건수 추이') +
+    utBucketRow('rpu','건당 매출 추이 (원)') +
+    utBucketRow('rev','총 매출 추이 (원)');
+
+  return `
+    ${kpiRow}
+    <div class="chart-grid cols2" style="margin-top:12px">
+      <div class="chart-card"><div class="chart-hdr">이용건수 추이</div>
+        <div class="chart-wrap"><canvas id="wt_cnt_ch"></canvas></div></div>
+      <div class="chart-card"><div class="chart-hdr">건당매출 추이 (원)</div>
+        <div class="chart-wrap"><canvas id="wt_rpu_ch"></canvas></div></div>
+      <div class="chart-card"><div class="chart-hdr">시간당매출 추이 (원/h)</div>
+        <div class="chart-wrap"><canvas id="wt_rph_ch"></canvas></div></div>
+      <div class="chart-card"><div class="chart-hdr">평균 이용시간 추이 (h)</div>
+        <div class="chart-wrap"><canvas id="wt_avg_ch"></canvas></div></div>
+    </div>
+    <div class="chart-card" style="margin-top:12px">
+      <div class="chart-hdr">이용 구간 분포 (최근 기준)</div>
+      <div style="display:flex;align-items:center;gap:20px;padding:10px 16px">
+        <canvas id="ut_pie_ch" width="90" height="90" style="flex-shrink:0"></canvas>
+        <div style="flex:1;min-width:0">${distBars}</div>
+      </div>
+    </div>
+    ${utTrendSection}`;
+}
+
+function renderWaytype(ds) {
+  const toggleBtns = WT_DEFS.map(w => {
+    const active = w.key === _wayMode;
+    return `<button class="wt-toggle-btn${active?' active':''}" data-key="${w.key}"
+      onclick="switchWayType('${w.key}')"
+      style="border-color:${active?w.color:'transparent'};color:${active?w.color:'#6b7280'};background:${active?w.color+'12':'none'}">
+      ${w.label}
+    </button>`;
   }).join('');
-
-  // 이용 구간 도넛 슬라이스 (W-1 기준)
-  const pieSlices = utTotal > 0 ? utBuckets.map((k,i) => {
-    const v   = W1?.[k] || 0;
-    const rev = W1?.[utRevKeys[i]] || 0;
-    const rpu = v > 0 ? Math.round(rev / v) : 0;
-    const pct = (v / utTotal * 100).toFixed(1);
-    return `<div class="ut-slice">
-      <span class="ut-dot" style="background:${utColors[i]}"></span>
-      <span class="ut-label">${utLabels[i]}</span>
-      <span class="ut-pct">${pct}%</span>
-      <span class="ut-cnt">${fmt(v,'cnt')}건</span>
-      <span class="ut-rpu" style="color:#6b7280;font-size:10px">${fmt(rpu,'krw')}원/건</span>
-    </div>`;
-  }).join('') : '<div style="color:#9ca3af;font-size:12px">데이터 없음</div>';
 
   return `
     <div class="metric-section">
-      <div class="wt-grid">${wayCols}</div>
-    </div>
-    <div class="metric-section">
-      <div class="chart-grid cols2" style="margin-bottom:12px">
-        <div class="chart-card">
-          <div class="chart-hdr">⏱ 이용 구간별 건수 추이</div>
-          <div class="chart-wrap"><canvas id="wt_count_ch"></canvas></div>
-        </div>
-        <div class="chart-card">
-          <div class="chart-hdr">💰 이용 구간별 건당매출 추이 (원)</div>
-          <div class="chart-wrap"><canvas id="wt_rev_ch"></canvas></div>
-        </div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-hdr">⏱ 이용 구간 분포 (W-1 기준)</div>
-        <div style="display:flex;align-items:center;gap:32px;padding:12px 14px">
-          <canvas id="ut_pie_ch" width="130" height="130" style="flex-shrink:0"></canvas>
-          <div class="ut-legend">${pieSlices}</div>
-        </div>
-      </div>
-      <div class="chart-grid cols2" style="margin-top:12px">
-        <div class="chart-card">
-          <div class="chart-hdr">📊 Way Type 이용건수 추이</div>
-          <div class="chart-wrap"><canvas id="wt_way_count_ch"></canvas></div>
-        </div>
-        <div class="chart-card">
-          <div class="chart-hdr">💳 Way Type 건당매출 추이 (원)</div>
-          <div class="chart-wrap"><canvas id="wt_way_rev_ch"></canvas></div>
-        </div>
-      </div>
+      <div class="wt-toggle-bar">${toggleBtns}</div>
+      <div id="wtContent">${buildWtContent(ds)}</div>
     </div>`;
 }
 
 function renderWaytypeCharts(ds) {
-  const nows = ds.now;
-  const lbls = nows.map(w => `W${w.isoweek}`);
+  const w    = WT_DEFS.find(d => d.key === _wayMode);
+  // YTD 모드에서 미래 null 제거 — 실제 데이터만 사용
+  const cutIdx = ds.futureFrom != null ? ds.futureFrom : ds.now.length;
+  const nows = ds.now.slice(0, cutIdx);
+  const yoys = ds.yoy.slice(0, cutIdx);
+  const lbls = ds.labels.slice(0, cutIdx);
+  const yoyColor = '#94a3b8';
 
-  // ── 공통 선 차트 생성 헬퍼 ──
-  function makeLineChart(id, datasets, fmt) {
+  function makeWtChart(id, nowVals, yoyVals, fmtKey, yAxisLabel) {
     const ctx = document.getElementById(id);
     if (!ctx) return;
+    // 기존 인스턴스 제거
+    const ex = charts.find(c => c.canvas?.id === id);
+    if (ex) { ex.destroy(); charts.splice(charts.indexOf(ex), 1); }
     const inst = new Chart(ctx, {
       type: 'line',
-      data: { labels: lbls, datasets },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        layout: { padding: { top: 20 } },
-        plugins: {
-          legend: { labels: { font:{size:10}, boxWidth:10, usePointStyle:true } },
+      data: { labels: lbls, datasets: [
+        {
+          label: `${w.label} (2026)`,
+          data: nowVals, borderColor: w.color, backgroundColor: w.color+'18',
+          fill: true, tension:.25, pointRadius:5, pointHoverRadius:7, borderWidth:2.5,
           datalabels: {
             anchor:'top', align:'top', offset:2,
-            font:{ size:8, weight:'bold' },
-            color: ctx => datasets[ctx.datasetIndex]?.borderColor,
-            formatter: v => v == null ? '' : fmtAxis(v, fmt),
+            font:{size:9,weight:'bold'}, color: w.color,
+            formatter: v => v==null?'':fmtAxis(v, fmtKey),
           },
         },
+        {
+          label: `${w.label} (2025)`,
+          data: yoyVals, borderColor: yoyColor, backgroundColor:'transparent',
+          fill:false, borderDash:[4,3], tension:.25,
+          pointRadius:3, borderWidth:1.5,
+          datalabels:{display:false},
+        },
+      ]},
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        layout:{padding:{top:22}},
+        plugins: {
+          legend:{labels:{font:{size:10},boxWidth:10,usePointStyle:true}},
+          datalabels:{},
+        },
         scales: {
-          x: { ticks:{font:{size:10}} },
-          y: { ticks:{ font:{size:10}, callback: v => fmtAxis(v, fmt) } },
+          x:{ticks:{font:{size:10}}},
+          y:{
+            suggestedMin: (() => { const a=[...nowVals,...yoyVals].filter(v=>v!=null&&isFinite(v)); if(!a.length)return 0; const mn=Math.min(...a),mx=Math.max(...a),p=(mx-mn)*.15||mx*.1||1; return mn-p; })(),
+            suggestedMax: (() => { const a=[...nowVals,...yoyVals].filter(v=>v!=null&&isFinite(v)); if(!a.length)return 1; const mn=Math.min(...a),mx=Math.max(...a),p=(mx-mn)*.15||mx*.1||1; return mx+p; })(),
+            ticks:{font:{size:10}, callback: v => fmtAxis(v,fmtKey)},
+          },
         },
       },
     });
     charts.push(inst);
   }
 
-  // ── 이용 구간별 건수 추이 ──
+  const get = (rows, key) => rows.map(r => r?.[key] ?? null);
+  const getRph = (rows, rk, hk) => rows.map(r => {
+    const rev = r?.[rk] ?? null, hrs = r?.[hk] ?? null;
+    return (rev != null && hrs > 0) ? Math.round(rev / hrs) : null;
+  });
+  const getYoy = (nowR, key) => nowR.map(r => {
+    const match = yoys.find(y => y.isoweek === r.isoweek);
+    return match?.[key] ?? null;
+  });
+  const getYoyRph = (nowR, rk, hk) => nowR.map(r => {
+    const match = yoys.find(y => y.isoweek === r.isoweek);
+    if (!match) return null;
+    const rev = match[rk] ?? null, hrs = match[hk] ?? null;
+    return (rev != null && hrs > 0) ? Math.round(rev / hrs) : null;
+  });
+
+  makeWtChart('wt_cnt_ch', get(nows, w.count),  getYoy(nows, w.count),  'cnt',    '건');
+  makeWtChart('wt_rpu_ch', get(nows, w.rev),     getYoy(nows, w.rev),    'krw',    '원');
+  makeWtChart('wt_rph_ch', getRph(nows, w.rev, w.hours), getYoyRph(nows, w.rev, w.hours), 'krw', '원/h');
+  makeWtChart('wt_avg_ch', get(nows, w.hours),   getYoy(nows, w.hours),  'hr',     'h');
+
+  // ── 이용 구간별 추이 차트 ──
   const utCountKeys = ['u_0to4h','u_4to8h','u_8to24h','u_24plus'];
   const utRevKeys   = ['u_0to4h_rev','u_4to8h_rev','u_8to24h_rev','u_24plus_rev'];
-  const utLabels    = ['0~4h','4~8h','8~24h','24h+'];
-  const utColors    = ['#60a5fa','#2563eb','#7c3aed','#1e3a8a'];
+  const utBucketLabels = ['0~4h','4~8h','8~24h','24h+'];
+  const utBucketColors = ['#93c5fd','#3b82f6','#6d28d9','#1e3a8a'];
 
-  makeLineChart('wt_count_ch',
-    utCountKeys.map((k,i) => ({
-      label: utLabels[i],
-      data: nows.map(r => r[k] ?? null),
-      borderColor: utColors[i], backgroundColor: utColors[i]+'18',
-      fill: false, tension:.25, pointRadius:4, pointHoverRadius:6, borderWidth:2.5,
-    })), 'cnt');
+  // valsFn(row, cntKey, revKey) → value
+  function makeUtBucketChart(id, valsFn, fmtKey) {
+    const ctx = document.getElementById(id);
+    if (!ctx) return;
+    const ex = charts.find(c => c.canvas?.id === id);
+    if (ex) { ex.destroy(); charts.splice(charts.indexOf(ex), 1); }
+    const datasets = utCountKeys.map((ck, i) => {
+      const rk = utRevKeys[i];
+      const data = nows.map(r => valsFn(r, ck, rk));
+      return {
+        label: utBucketLabels[i], data,
+        borderColor: utBucketColors[i], backgroundColor: 'transparent',
+        fill: false, tension:.25,
+        pointRadius: nows.length <= 8 ? 4 : 2,
+        pointHoverRadius: 6, borderWidth: 2.2,
+        datalabels: {
+          anchor:'top', align:'top', offset:2,
+          font:{size:8,weight:'bold'}, color: utBucketColors[i],
+          display: ctx => nows.length <= 8,
+          formatter: v => v==null?'':fmtAxis(v, fmtKey),
+        },
+      };
+    });
+    const allV = datasets.flatMap(d=>d.data).filter(v=>v!=null&&isFinite(v));
+    const mn = allV.length?Math.min(...allV):0, mx = allV.length?Math.max(...allV):1;
+    const p = (mx-mn)*.15||mx*.1||1;
+    const inst = new Chart(ctx, {
+      type:'line',
+      data:{ labels: lbls, datasets },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        layout:{padding:{top:20}},
+        plugins:{
+          legend:{labels:{font:{size:10},boxWidth:10,usePointStyle:true}},
+          datalabels:{},
+        },
+        scales:{
+          x:{ticks:{font:{size:10}}},
+          y:{suggestedMin:mn-p, suggestedMax:mx+p, ticks:{font:{size:10},callback:v=>fmtAxis(v,fmtKey)}},
+        },
+      },
+    });
+    charts.push(inst);
+    return inst;
+  }
 
-  // ── 이용 구간별 건당매출 추이 ──
-  makeLineChart('wt_rev_ch',
-    utCountKeys.map((k,i) => ({
-      label: utLabels[i],
-      data: nows.map(r => {
-        const cnt = r[k] || 0;
-        const rev = r[utRevKeys[i]] || 0;
-        return cnt > 0 ? Math.round(rev / cnt) : null;
-      }),
-      borderColor: utColors[i], backgroundColor: utColors[i]+'18',
-      fill: false, tension:.25, pointRadius:4, pointHoverRadius:6, borderWidth:2.5,
-    })), 'krw');
+  const utValsFns = {
+    cnt: (r, ck)     => r?.[ck] ?? null,
+    rpu: (r, ck, rk) => { const c=r?.[ck]||0,v=r?.[rk]||0; return c>0?Math.round(v/c):null; },
+    rev: (r, ck, rk) => r?.[rk] ?? null,
+  };
+  const utFmtKeys = { cnt:'cnt', rpu:'krw', rev:'krw' };
 
-  // ── Way Type 이용건수 추이 ──
-  const ways = [
-    { label:'왕복', color:'#0064FF', count:'round_count',  rev:'round_rev_per_use' },
-    { label:'편도', color:'#8b5cf6', count:'oneway_count', rev:'oneway_rev_per_use' },
-    { label:'부름', color:'#ec4899', count:'d2d_count',    rev:'d2d_rev_per_use' },
-  ];
-  makeLineChart('wt_way_count_ch',
-    ways.map(w => ({
-      label: w.label, data: nows.map(r => r[w.count] ?? null),
-      borderColor: w.color, backgroundColor: w.color+'18',
-      fill: false, tension:.25, pointRadius:4, pointHoverRadius:6, borderWidth:2.5,
-    })), 'cnt');
+  // 버킷 i 하나짜리 소형 차트 (현재+YoY)
+  function makeUtMiniChart(id, nowVals, yoyVals, fmtKey, color) {
+    const ctx = document.getElementById(id);
+    if (!ctx) return;
+    const ex = charts.find(c => c.canvas?.id === id);
+    if (ex) { ex.destroy(); charts.splice(charts.indexOf(ex), 1); }
+    const allV = [...nowVals, ...yoyVals].filter(v => v != null && isFinite(v));
+    const mn = allV.length ? Math.min(...allV) : 0;
+    const mx = allV.length ? Math.max(...allV) : 1;
+    const p  = (mx - mn) * 0.15 || mx * 0.1 || 1;
+    const inst = new Chart(ctx, {
+      type: 'line',
+      data: { labels: lbls, datasets: [
+        { label:'2026', data: nowVals, borderColor: color, backgroundColor: color+'22',
+          fill: true, tension:.3, pointRadius:3, pointHoverRadius:5, borderWidth:2,
+          datalabels:{ anchor:'top', align:'top', offset:1, font:{size:8,weight:'bold'}, color,
+            formatter: v => v==null?'':fmtAxis(v,fmtKey) } },
+        { label:'2025', data: yoyVals, borderColor:'#94a3b8', backgroundColor:'transparent',
+          fill:false, borderDash:[3,3], tension:.3, pointRadius:2, borderWidth:1.5,
+          datalabels:{display:false} },
+      ]},
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        layout:{padding:{top:16, right:4}},
+        plugins:{ legend:{display:false}, datalabels:{} },
+        scales:{
+          x:{ticks:{font:{size:9}, maxRotation:0}},
+          y:{suggestedMin:mn-p, suggestedMax:mx+p,
+             ticks:{font:{size:8}, maxTicksLimit:4, callback:v=>fmtAxis(v,fmtKey)}},
+        },
+      },
+    });
+    charts.push(inst);
+  }
 
-  makeLineChart('wt_way_rev_ch',
-    ways.map(w => ({
-      label: w.label, data: nows.map(r => r[w.rev] ?? null),
-      borderColor: w.color, backgroundColor: w.color+'18',
-      fill: false, tension:.25, pointRadius:4, pointHoverRadius:6, borderWidth:2.5,
-    })), 'krw');
+  if (period === 'ytd') {
+    makeUtBucketChart('ut_ytd_ch', utValsFns[_utMetric], utFmtKeys[_utMetric]);
+  } else {
+    // Weekly/Monthly: 지표별로 버킷 4개 소형 차트
+    const metricsToRender = [
+      { key:'cnt', fmtKey:'cnt',  nowFn:(r,ck)=>r?.[ck]??null, yoyFn:(r,ck)=>r?.[ck]??null },
+      { key:'rpu', fmtKey:'krw',  nowFn:(r,ck,rk)=>{const c=r?.[ck]||0,v=r?.[rk]||0;return c>0?Math.round(v/c):null;},
+                                   yoyFn:(r,ck,rk)=>{const c=r?.[ck]||0,v=r?.[rk]||0;return c>0?Math.round(v/c):null;} },
+      { key:'rev', fmtKey:'krw',  nowFn:(r,ck,rk)=>r?.[rk]??null, yoyFn:(r,ck,rk)=>r?.[rk]??null },
+    ];
+    metricsToRender.forEach(m => {
+      utCountKeys.forEach((ck, i) => {
+        const rk = utRevKeys[i];
+        const color = utBucketColors[i];
+        const nowVals = nows.map(r => m.nowFn(r, ck, rk));
+        // YoY: 같은 인덱스의 yoy 데이터
+        const yoyVals = yoys.map(r => r ? m.yoyFn(r, ck, rk) : null);
+        makeUtMiniChart(`ut_${m.key}_${i}`, nowVals, yoyVals, m.fmtKey, color);
+      });
+    });
+  }
 
-  // ── 이용 구간 도넛 차트 ──
+  // 이용 구간 도넛
   const pieCtx = document.getElementById('ut_pie_ch');
   if (pieCtx && nows.length) {
-    const W1 = nows.at(-1);
-    const data = utCountKeys.map(k => W1?.[k] || 0);
+    const ex = charts.find(c => c.canvas?.id === 'ut_pie_ch');
+    if (ex) { ex.destroy(); charts.splice(charts.indexOf(ex), 1); }
+    const W1last = nows.at(-1);
     const inst = new Chart(pieCtx, {
-      type: 'doughnut',
-      data: { labels: utLabels, datasets:[{ data, backgroundColor: utColors, borderWidth:1 }] },
-      options: {
-        responsive: false,
-        plugins: { legend:{display:false}, datalabels:{display:false} },
-      },
+      type:'doughnut',
+      data:{ labels:utBucketLabels, datasets:[{
+        data: utCountKeys.map(k=>W1last?.[k]||0),
+        backgroundColor: utBucketColors, borderWidth:1
+      }] },
+      options:{ responsive:false, plugins:{legend:{display:false},datalabels:{display:false}} },
     });
     charts.push(inst);
   }
@@ -1315,6 +1687,30 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('chatSidebar').classList.add('chat-hidden');
 });
 
+function switchUtil(chartIdx, mode, btn) {
+  // 버튼 활성화 전환
+  const parent = btn.closest('.util-toggle');
+  parent.querySelectorAll('.util-toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const key   = mode === 'weekday' ? 'opr_weekday' : 'opr_weekend';
+  const color = mode === 'weekday' ? '#3b82f6'     : '#f59e0b';
+  const mg    = METRICS[metric];
+  const cfg   = mg.charts[chartIdx];
+  const patchedCfg = { ...cfg, keys: [key], colors: [color] };
+  const ds = getDatasets();
+
+  // 차트 재렌더
+  const existing = charts.find(c => c.canvas && c.canvas.id === `ch${chartIdx}`);
+  if (existing) { existing.destroy(); charts.splice(charts.indexOf(existing), 1); }
+  drawChart(`ch${chartIdx}`, patchedCfg, ds);
+
+  // 테이블 재렌더
+  const card = btn.closest('.chart-card');
+  const tableWrap = card.querySelector('.data-table-wrap');
+  if (tableWrap) tableWrap.innerHTML = buildTable(patchedCfg, ds, chartIdx);
+}
+
 function setPeriod(p, btn) {
   period = p;
   document.querySelectorAll('#periodTabs .tab').forEach(b=>b.classList.remove('active'));
@@ -1376,7 +1772,7 @@ async function loadAiConfig() {
     // Badge: show model short name
     const badge = modelName.replace('dev/','').replace('prod/','');
     document.getElementById('chatModelBadge').textContent = badge;
-    document.getElementById('chatStatus').textContent = aiConfigured ? 'SOCAR 경기강원 AI · LLM Gateway' : 'API 키 미설정';
+    document.getElementById('chatStatus').textContent = aiConfigured ? 'SOCAR 경기강원 AI 어시스턴트' : 'API 키 미설정';
     if (!aiConfigured) {
       document.getElementById('chatNoKey').style.display = 'block';
       document.getElementById('chatInputArea').style.display = 'none';
@@ -1429,6 +1825,8 @@ async function sendChat() {
   const text = input.value.trim();
   if (!text || chatBusy || !aiConfigured) return;
   input.value = '';
+  input.blur();   // IME 조합 상태 초기화
+  input.focus();
   input.style.height = 'auto';
   await runAI(text);
 }
@@ -1441,10 +1839,35 @@ async function quickAnalyze(type) {
   await runAI(null, prompt);
 }
 
-const SYSTEM_PROMPT = `당신은 SOCAR(쏘카) 경기/강원 카셰어링 사업팀의 실적 분석 전문가입니다.
-팀원들과 자유롭게 대화하며, 실적 데이터 분석·해석·전략 논의를 돕습니다.
-인사나 일상 대화에는 친근하게 응답하고, 실적 관련 질문에는 데이터 기반으로 구체적으로 답변하세요.
-한국어로 자연스럽게 대화하세요.`;
+const SYSTEM_PROMPT = `당신은 SOCAR(쏘카) 경기/강원 카셰어링 사업팀의 실적 분석 전문가 "소라"입니다.
+
+[답변 원칙 — 반드시 지킬 것]
+1. 반드시 제공된 실제 지표 수치를 근거로 삼아 답변하세요. 수치 없는 추상적 조언은 금지입니다.
+2. 인과관계를 명시하세요: "X 지표가 Y 수준이기 때문에 → Z 액션을 통해 W 개선을 기대할 수 있다" 형식.
+3. 액션은 이번 주 내 실행 가능한 것을 우선하고, 담당자·채널·목표 수치를 함께 제시하세요.
+4. 복수의 지표가 연동된다면 그 관계(예: 가동률↑ → 대당매출↑)를 명시하세요.
+5. 데이터가 없거나 불확실한 경우엔 솔직히 말하고 확인이 필요한 지표를 제시하세요.
+6. 인사/일상 대화에는 자연스럽게 응답하되, 실적 관련 질문에는 위 원칙을 엄격히 적용하세요.
+7. 한국어로 간결하게 답변하세요. 마크다운 볼드(**) 사용 가능.`;
+
+function buildDataContext() {
+  const ds = getDatasets();
+  const _li = ds.futureFrom != null ? ds.futureFrom - 1 : ds.now.length - 1;
+  const W1 = ds.now[_li], W2 = ds.now[_li-1], Y1 = ds.yoy[_li];
+  if (!W1) return '';
+  const pct = (v, base) => { if (v==null||base==null||base===0) return '-'; const c=((v-base)/Math.abs(base)*100); return (c>0?'+':'')+c.toFixed(1)+'%'; };
+  const lines = [
+    `[현재 데이터 컨텍스트] ${period==='weekly'?`W${W1.isoweek}주차`:period==='monthly'?'최근월':'YTD'} 기준${region?' / 지역: '+region:''}`,
+    `대당매출: ${fmt(W1.rev_per_car,'krw')}원 (WoW ${pct(W1.rev_per_car,W2?.rev_per_car)}, YoY ${pct(W1.rev_per_car,Y1?.rev_per_car)})`,
+    `GPM: ${fmt(W1.gpm,'pct')} (WoW ${pct(W1.gpm,W2?.gpm)}, YoY ${pct(W1.gpm,Y1?.gpm)})`,
+    `주중가동률: ${fmt(W1.opr_weekday,'pct')} / 주말가동률: ${fmt(W1.opr_weekend,'pct')}`,
+    `이용건수: ${fmt(W1.use_count,'cnt')}건 (WoW ${pct(W1.use_count,W2?.use_count)}, YoY ${pct(W1.use_count,Y1?.use_count)})`,
+    `왕복 ${fmt(W1.round_count,'cnt')}건(${fmt(W1.round_rev_per_use,'krw')}원) / 편도 ${fmt(W1.oneway_count,'cnt')}건(${fmt(W1.oneway_rev_per_use,'krw')}원) / 부름 ${fmt(W1.d2d_count,'cnt')}건(${fmt(W1.d2d_rev_per_use,'krw')}원)`,
+    `수요접속: ${fmt(W1.attempt,'cnt')}건, 실패율: ${fmt(W1.fail_rate,'pct')}, 결제시도: ${fmt(W1.payment_attempt,'cnt')}건`,
+    `운영대수: ${fmt(W1.car_count,'cnt')}대 / 총매출: ${fmt(W1.revenue,'krw')}원`,
+  ];
+  return lines.join('\n');
+}
 
 async function runAI(userText, prebuiltPrompt) {
   if (!aiConfigured || chatBusy) return;
@@ -1452,7 +1875,14 @@ async function runAI(userText, prebuiltPrompt) {
   const setBtnsDisabled = (v) => document.querySelectorAll('.chat-action-btn, #chatSendBtn').forEach(b => b.disabled = v);
   setBtnsDisabled(true);
 
-  const userContent = prebuiltPrompt || userText;
+  // 자유 질문 시 현재 지표 컨텍스트 자동 첨부
+  let userContent;
+  if (prebuiltPrompt) {
+    userContent = prebuiltPrompt;
+  } else {
+    const ctx = buildDataContext();
+    userContent = ctx ? `${ctx}\n\n[질문] ${userText}` : userText;
+  }
   const displayText = prebuiltPrompt
     ? (period === 'weekly' ? 'W-1 실적 분석 요청' : period === 'monthly' ? '월별 트렌드 분석 요청' : 'YTD 분석 요청')
     : userText;
@@ -1495,7 +1925,8 @@ async function runAI(userText, prebuiltPrompt) {
 
 function buildPrompt(mode) {
   const ds = getDatasets();
-  const W1 = ds.now.at(-1), W2 = ds.now.at(-2), Y1 = ds.yoy.at(-1);
+  const _li2 = ds.futureFrom != null ? ds.futureFrom - 1 : ds.now.length - 1;
+  const W1 = ds.now[_li2] ?? null, W2 = ds.now[_li2 - 1] ?? null, Y1 = ds.yoy[_li2] ?? null;
   const regionStr = region ? `[${region}] ` : '';
   const fmtRow = (w) => !w ? '-' : [
     `대당매출 ${fmt(w.rev_per_car,'krw')}원`,

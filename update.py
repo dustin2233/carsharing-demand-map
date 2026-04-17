@@ -1102,6 +1102,96 @@ def query_gcar_zones(team_id='gyeonggi'):
     return run_bq(sql)
 
 
+EV_CHARGER_API_KEY = '5145469085c4a37aebedd3f2859b7c4616180a6b57ce5a999e2afa96ed472e9a'
+EV_CHARGER_ZCODES = {
+    'seoul': ['11'],          # 서울
+    'gyeonggi': ['41', '51'], # 경기, 강원(특별자치도)
+    'chungcheong': ['43', '44', '30', '36'],  # 충북, 충남, 대전, 세종
+    'gyeongbuk': ['47', '27'],  # 경북, 대구
+    'gyeongnam': ['48', '26', '31'],  # 경남, 부산, 울산
+    'honam': ['45', '46', '29'],  # 전북, 전남, 광주
+}
+
+
+def query_ev_chargers(team_id='gyeonggi'):
+    """환경부 API로 전기차 충전소 정보 조회 → 충전소(statId)별 집계"""
+    zcodes = EV_CHARGER_ZCODES.get(team_id, ['41'])
+    all_chargers = []
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    for zcode in zcodes:
+        page = 1
+        while True:
+            url = (f"http://apis.data.go.kr/B552584/EvCharger/getChargerInfo"
+                   f"?serviceKey={EV_CHARGER_API_KEY}&numOfRows=9999&pageNo={page}"
+                   f"&dataType=JSON&zcode={zcode}")
+            req = urllib.request.Request(url, headers={'User-Agent': 'socar-demand-map/1.0'})
+            try:
+                with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+                    data = json.loads(resp.read())
+                items = data.get('items', data.get('body', {}).get('items', []))
+                if not items:
+                    break
+                all_chargers.extend(items)
+                total = int(data.get('totalCount', data.get('body', {}).get('totalCount', 0)))
+                if page * 9999 >= total:
+                    break
+                page += 1
+            except Exception as e:
+                print(f"  [경고] 충전소 API 조회 실패 (zcode={zcode}, page={page}): {e}")
+                break
+            time.sleep(0.3)
+
+    # 충전소(statId)별 집계: 위치, 이름, 급속/완속 충전기 수
+    stations = {}
+    for c in all_chargers:
+        sid = c.get('statId', '')
+        if not sid:
+            continue
+        lat = float(c.get('lat', 0) or 0)
+        lng = float(c.get('lng', 0) or 0)
+        if lat == 0 or lng == 0:
+            continue
+        chger_type = int(c.get('chgerType', 0) or 0)
+        # chgerType: 01=DC차데모, 02=AC완속, 03=DC차데모+AC3상, 04=DC콤보, 05=DC차데모+DC콤보, 06=DC차데모+AC3상+DC콤보, 07=AC3상
+        is_fast = chger_type in [1, 3, 4, 5, 6]
+
+        if sid not in stations:
+            stations[sid] = {
+                'statId': sid,
+                'statNm': c.get('statNm', ''),
+                'addr': c.get('addr', ''),
+                'lat': lat, 'lng': lng,
+                'busiNm': c.get('busiNm', ''),
+                'useTime': c.get('useTime', ''),
+                'fast': 0, 'slow': 0,
+            }
+        if is_fast:
+            stations[sid]['fast'] += 1
+        else:
+            stations[sid]['slow'] += 1
+
+    result = list(stations.values())
+    for s in result:
+        s['total'] = s['fast'] + s['slow']
+    print(f"  충전소 API: {len(all_chargers)}건 → {len(result)}개 충전소 집계")
+    return result
+
+
+def match_ev_to_zones(ev_data, zones_data, radius_km=0.1):
+    """운영 존과 충전소 매칭 (100m 이내 = 같은 현장)"""
+    for z in zones_data:
+        zlat, zlng = float(z['lat']), float(z['lng'])
+        nearby = [e for e in ev_data if haversine_km(zlat, zlng, e['lat'], e['lng']) <= radius_km]
+        z['ev_stations'] = len(nearby)
+        z['ev_fast'] = sum(e['fast'] for e in nearby)
+        z['ev_slow'] = sum(e['slow'] for e in nearby)
+        z['ev_total'] = sum(e['total'] for e in nearby)
+        z['ev_names'] = ', '.join(set(e['statNm'] for e in nearby))[:80] if nearby else ''
+
+
 def query_closed_zones(team_id='gyeonggi'):
     """폐쇄 존 현황: 과거 운영 이력이 있으나 현재 미운영인 모든 존"""
     z_region_filter = _region1_sql_col(team_id, 'z.region_1')
@@ -2587,6 +2677,7 @@ ZONE_JS = """
             '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + d2dColor + ';font-weight:600">' + d2d + '</span></div>' +
             contractHtml +
             profitHtml +
+            (z.ev_total > 0 ? '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div><div class="popup-row"><span class="popup-label">⚡ 충전기</span><span><b style="color:#43a047">' + z.ev_total + '기</b> (급속 ' + z.ev_fast + ' / 완속 ' + z.ev_slow + ')</span></div>' + (z.ev_names ? '<div class="popup-row"><span class="popup-label">충전소</span><span style="font-size:10px">' + z.ev_names + '</span></div>' : '') : '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div><div class="popup-row"><span class="popup-label">⚡ 충전기</span><span style="color:#bbb">100m 내 없음</span></div>') +
             '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
     }
 """
@@ -2604,7 +2695,7 @@ def _read_ngrok_url():
         return ''
 
 
-def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, parking_contract=None, timeline_data=None, closed_data=None, reentry_data=None, team_id='gyeonggi'):
+def generate_index(access_data, reservation_data, zones_data, gaps, analysis=None, dtod_data=None, profit_data=None, profit_period='', gcar_data=None, socar_supply=None, parking_contract=None, timeline_data=None, closed_data=None, reentry_data=None, ev_data=None, team_id='gyeonggi'):
     """잠재 수요 지도 HTML 생성"""
     team_name = TEAM_CONFIG[team_id]['name']
     team_center = TEAM_CONFIG[team_id]['center']
@@ -2881,6 +2972,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         </div>
         <button class="sidebar-btn" id="toggleGcar"><span class="dot" style="background:#ef5350"></span>그린카 존</button>
         <button class="sidebar-btn" id="toggleClosed"><span class="dot" style="background:#616161"></span>폐쇄 존</button>
+        <button class="sidebar-btn" id="toggleEv"><span class="dot" style="background:#43a047"></span>충전 인프라</button>
     </div>
     <div class="sidebar-section">
         <div class="sidebar-section-title">분석</div>
@@ -3023,6 +3115,7 @@ var dtodData = {jd(dtod_dots)};
 var zonesData = {jd(zones_data)};
 var gapsData = {jd(gaps)};
 var reentryData = {jd(reentry_data or [])};
+var evData = {jd(ev_data or [])};
 var analysisGrowth = {jd(analysis_growth)};
 var analysisDecline = {jd(analysis_decline)};
 var gcarData = {jd(gcar_zones)};
@@ -3448,6 +3541,31 @@ if (reentryRegionSelect) {{
     }});
 }}
 
+// 충전 인프라 레이어 (운영존 미매칭 충전소만 = 신규 EV존 후보)
+var evLayer = L.layerGroup();
+var zoneCoordSet = {{}};
+zonesData.forEach(function(z) {{ zoneCoordSet[z.lat.toFixed(3) + ',' + z.lng.toFixed(3)] = true; }});
+evData.forEach(function(e) {{
+    // 운영 존과 100m 이내 충전소는 이미 존 팝업에 표시되므로 레이어에서 제외
+    var nearZone = zonesData.some(function(z) {{
+        var dlat = (z.lat - e.lat) * 111; var dlng = (z.lng - e.lng) * 111 * Math.cos(e.lat * Math.PI / 180);
+        return Math.sqrt(dlat*dlat + dlng*dlng) <= 0.1;
+    }});
+    if (nearZone) return;
+    var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
+    L.circleMarker([e.lat, e.lng], {{
+        radius: Math.max(5, Math.min(12, 4 + e.total)),
+        fillColor: '#43a047', color: '#2e7d32', weight: 1.5, opacity: 0.8, fillOpacity: 0.4
+    }}).bindPopup(
+        '<div class="popup-title">⚡ ' + e.statNm + '</div>' +
+        '<div class="popup-row"><span class="popup-label">주소</span><span>' + e.addr + '</span></div>' +
+        '<div class="popup-row"><span class="popup-label">운영기관</span><span>' + e.busiNm + '</span></div>' +
+        '<div class="popup-row"><span class="popup-label">충전기</span><span><b style="color:#43a047">' + e.total + '기</b> (' + label + ')</span></div>' +
+        '<div class="popup-row"><span class="popup-label">이용시간</span><span>' + (e.useTime || '정보없음') + '</span></div>' +
+        '<div style="margin-top:6px;padding:4px 8px;background:#f0faf0;border-radius:6px;font-size:10px;color:#2e7d32;font-weight:600;">쏘카 미운영 · EV존 개설 후보</div>'
+    ).addTo(evLayer);
+}});
+
 // 그린카 존 레이어
 var gcarLayer = L.layerGroup();
 gcarData.forEach(function(g) {{
@@ -3547,7 +3665,7 @@ document.querySelectorAll('#marketSharePanel th').forEach(function(th) {{
 }});
 renderMarketShare();
 
-var showAccess = true, showRes = true, showZones = true, showGap = false, showReentry = false, showAnalysis = false, showDtod = false, showGcar = false, showClosed = false, showMarketShare = false;
+var showAccess = true, showRes = true, showZones = true, showGap = false, showReentry = false, showAnalysis = false, showDtod = false, showGcar = false, showClosed = false, showEv = false, showMarketShare = false;
 function styleBtn(btn, active) {{
     if (active) btn.classList.add('active');
     else btn.classList.remove('active');
@@ -3722,6 +3840,11 @@ document.getElementById('toggleClosed').addEventListener('click', function() {{
     showClosed ? closedLayer.addTo(map) : map.removeLayer(closedLayer);
     styleBtn(this, showClosed);
 }});
+document.getElementById('toggleEv').addEventListener('click', function() {{
+    showEv = !showEv;
+    showEv ? evLayer.addTo(map) : map.removeLayer(evLayer);
+    styleBtn(this, showEv);
+}});
 
 document.getElementById('toggleMarketShare').addEventListener('click', function() {{
     var wasOn = showMarketShare;
@@ -3739,6 +3862,7 @@ styleBtn(document.getElementById('toggleReentry'), false);
 styleBtn(document.getElementById('toggleAnalysis'), false);
 styleBtn(document.getElementById('toggleGcar'), false);
 styleBtn(document.getElementById('toggleClosed'), false);
+styleBtn(document.getElementById('toggleEv'), false);
 styleBtn(document.getElementById('toggleMarketShare'), false);
 
 // ── 측정 도구 (거리 재기 + 반경 측정) ──
@@ -4502,6 +4626,20 @@ def regenerate_from_cache(team_id='gyeonggi'):
         r['price_per_car'] = pc.get('price_per_car', 0)
     print(f"  재진입 추천구역: {len(reentry_data)} 지역")
 
+    # 전기차 충전소 데이터 로드/조회
+    ev_data = _load_cache("ev_chargers", team_id)
+    if ev_data is None:
+        try:
+            ev_data = query_ev_chargers(team_id=team_id)
+            _save_cache("ev_chargers", ev_data, team_id)
+        except Exception as e:
+            print(f"  [경고] 충전소 데이터 조회 실패: {e}")
+            ev_data = []
+    else:
+        print(f"  충전소 캐시: {len(ev_data)}개 충전소")
+    # 존에 충전소 매칭
+    match_ev_to_zones(ev_data, zones)
+
     # 쏘카 지역별 실 운영 차량 로드
     socar_supply = _load_cache("socar_supply", team_id) or {}
 
@@ -4520,7 +4658,7 @@ def regenerate_from_cache(team_id='gyeonggi'):
 
     html = generate_index(access, reservation, zones, gaps, analysis, dtod, profit_data,
                           gcar_data=gcar_data, socar_supply=socar_supply, parking_contract=parking_contract,
-                          timeline_data=timeline_data, closed_data=closed_data, reentry_data=reentry_data, team_id=team_id)
+                          timeline_data=timeline_data, closed_data=closed_data, reentry_data=reentry_data, ev_data=ev_data, team_id=team_id)
     out_dir = _team_output_dir(team_id)
     path = os.path.join(out_dir, "index.html")
     with open(path, "w") as f:
