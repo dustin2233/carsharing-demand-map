@@ -3621,7 +3621,14 @@ resLayer.addTo(map);
 
 var zoneLayer = L.layerGroup();
 var allZoneMarkers = [];
+// EV 가상존 ID 수집 (별도 마커 제외용)
+var evVirtualZoneIds = {{}};
 zonesData.forEach(function(z) {{
+    if (z.ev_zone) evVirtualZoneIds[z.ev_zone.zone_id] = true;
+}});
+zonesData.forEach(function(z) {{
+    // 가상존(전기차)은 원본존에 귀속 → 별도 마커 미표시
+    if (evVirtualZoneIds[z.zone_id]) return;
     var popupOpts = z.ev_zone ? {{ maxWidth: 560 }} : {{ maxWidth: 300 }};
     var evZoneId = z.ev_zone ? z.ev_zone.zone_id : null;
     var evZoneName = z.ev_zone ? z.ev_zone.zone_name : null;
