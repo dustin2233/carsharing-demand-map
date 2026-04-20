@@ -1237,6 +1237,38 @@ def match_ev_to_zones(ev_data, zones_data, radius_km=0.1):
         z['ev_same_slow'] = sum(e['slow'] for e in z['ev_detail'] if e['same'])
 
 
+def query_ev_car_zones(team_id='gyeonggi'):
+    """EV 차량이 배치된 존 조회 → zone_id: {ev_car_count, ev_charged_count}"""
+    region_filter = _region1_sql_col(team_id, 'cz.region1')
+    sql = f"""
+    SELECT ci.zone_id,
+           COUNT(DISTINCT ci.id) AS ev_car_count,
+           COUNTIF(ci.car_name LIKE '%충전보장%') AS ev_charged_count
+    FROM `socar-data.tianjin_replica.car_info` ci
+    JOIN `socar-data.tianjin_replica.carzone_info` cz ON ci.zone_id = cz.id
+    WHERE (ci.car_name LIKE '%EV%' OR ci.car_name LIKE '%아이오닉%' OR ci.car_name LIKE '%니로 EV%')
+      AND ci.state IN (4,5) AND ci.level = 1
+      AND ci.sharing_type IN ('socar','zplus')
+      AND cz.state = 1 AND {region_filter}
+    GROUP BY ci.zone_id
+    """
+    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=500", sql]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+    if result.returncode != 0:
+        print(f"  [경고] EV 차량 존 조회 실패: {result.stderr[:200]}")
+        return {}
+    rows = json.loads(result.stdout)
+    ev_map = {}
+    for r in rows:
+        zid = int(r['zone_id'])
+        ev_map[zid] = {
+            'ev_car_count': int(r['ev_car_count']),
+            'ev_charged_count': int(r['ev_charged_count']),
+        }
+    print(f"  EV 차량 존: {len(ev_map)}개 ({sum(v['ev_car_count'] for v in ev_map.values())}대)")
+    return ev_map
+
+
 def query_ev_virtual_zones(team_id='gyeonggi'):
     """충전보장형 전기차 가상존 조회 — original_zone_id로 원본존에 매핑"""
     region_filter = _region1_sql_col(team_id, 'z.region_1')
@@ -3179,7 +3211,12 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         </div>
         <button class="sidebar-btn" id="toggleGcar"><span class="dot" style="background:#ef5350"></span>그린카 존</button>
         <button class="sidebar-btn" id="toggleClosed"><span class="dot" style="background:#616161"></span>폐쇄 존</button>
-        <button class="sidebar-btn" id="toggleEv"><span class="dot" style="background:#1565c0"></span>충전 인프라</button>
+    </div>
+    <div class="sidebar-section">
+        <div class="sidebar-section-title">EV</div>
+        <button class="sidebar-btn" id="toggleEvZones"><span class="dot" style="background:#1565c0"></span>EV 운영 존</button>
+        <button class="sidebar-btn" id="toggleChargedOnly"><span class="dot" style="background:#0d47a1"></span>충전보장형만</button>
+        <button class="sidebar-btn" id="toggleEvInfra"><span class="dot" style="background:#42a5f5"></span>충전 인프라</button>
     </div>
     <div class="sidebar-section">
         <div class="sidebar-section-title">분석</div>
@@ -3883,7 +3920,7 @@ document.querySelectorAll('#marketSharePanel th').forEach(function(th) {{
 }});
 renderMarketShare();
 
-var showAccess = true, showRes = true, showZones = true, showGap = false, showReentry = false, showAnalysis = false, showDtod = false, showGcar = false, showClosed = false, showEv = false, showMarketShare = false;
+var showAccess = true, showRes = true, showZones = true, showGap = false, showReentry = false, showAnalysis = false, showDtod = false, showGcar = false, showClosed = false, showMarketShare = false;
 function styleBtn(btn, active) {{
     if (active) btn.classList.add('active');
     else btn.classList.remove('active');
@@ -4058,10 +4095,65 @@ document.getElementById('toggleClosed').addEventListener('click', function() {{
     showClosed ? closedLayer.addTo(map) : map.removeLayer(closedLayer);
     styleBtn(this, showClosed);
 }});
-document.getElementById('toggleEv').addEventListener('click', function() {{
-    showEv = !showEv;
-    showEv ? evLayer.addTo(map) : map.removeLayer(evLayer);
-    styleBtn(this, showEv);
+// EV 필터: 1=EV운영존, 2=충전보장형만 (1과2 상호배제), 3=충전인프라 (독립)
+var evFilterMode = 0; // 0=off, 1=EV운영존, 2=충전보장형만
+var showEvInfra = false;
+
+function applyEvZoneFilter() {{
+    // 존 마커 필터링
+    allZoneMarkers.forEach(function(m) {{
+        var z = m._zoneData;
+        if (!z) return;
+        if (evFilterMode === 0) {{
+            // EV 필터 꺼짐 — 기존 존타입 필터만 적용
+            return;
+        }}
+        if (evFilterMode === 1 && !z.has_ev) {{
+            zoneLayer.removeLayer(m);
+        }}
+        if (evFilterMode === 2 && !z.has_charged_ev) {{
+            zoneLayer.removeLayer(m);
+        }}
+    }});
+}}
+
+function resetZoneLayer() {{
+    zoneLayer.clearLayers();
+    allZoneMarkers.forEach(function(m) {{
+        var z = m._zoneData;
+        if (!z) return;
+        zoneLayer.addLayer(m);
+    }});
+    applyZoneTypeFilter();
+    if (evFilterMode > 0) applyEvZoneFilter();
+}}
+
+document.getElementById('toggleEvZones').addEventListener('click', function() {{
+    if (evFilterMode === 1) {{
+        evFilterMode = 0;
+        styleBtn(this, false);
+    }} else {{
+        evFilterMode = 1;
+        styleBtn(this, true);
+        styleBtn(document.getElementById('toggleChargedOnly'), false);
+    }}
+    resetZoneLayer();
+}});
+document.getElementById('toggleChargedOnly').addEventListener('click', function() {{
+    if (evFilterMode === 2) {{
+        evFilterMode = 0;
+        styleBtn(this, false);
+    }} else {{
+        evFilterMode = 2;
+        styleBtn(this, true);
+        styleBtn(document.getElementById('toggleEvZones'), false);
+    }}
+    resetZoneLayer();
+}});
+document.getElementById('toggleEvInfra').addEventListener('click', function() {{
+    showEvInfra = !showEvInfra;
+    showEvInfra ? evLayer.addTo(map) : map.removeLayer(evLayer);
+    styleBtn(this, showEvInfra);
 }});
 
 document.getElementById('toggleMarketShare').addEventListener('click', function() {{
@@ -4080,7 +4172,9 @@ styleBtn(document.getElementById('toggleReentry'), false);
 styleBtn(document.getElementById('toggleAnalysis'), false);
 styleBtn(document.getElementById('toggleGcar'), false);
 styleBtn(document.getElementById('toggleClosed'), false);
-styleBtn(document.getElementById('toggleEv'), false);
+styleBtn(document.getElementById('toggleEvZones'), false);
+styleBtn(document.getElementById('toggleChargedOnly'), false);
+styleBtn(document.getElementById('toggleEvInfra'), false);
 styleBtn(document.getElementById('toggleMarketShare'), false);
 
 // ── 측정 도구 (거리 재기 + 반경 측정) ──
@@ -4892,6 +4986,25 @@ def regenerate_from_cache(team_id='gyeonggi'):
         elif isinstance(ev_vz, dict):
             # string key fallback
             z['ev_zone'] = ev_vz.get(str(zid), None)
+
+    # EV 차량 보유 존 매핑
+    ev_cars = _load_cache("ev_car_zones", team_id)
+    if ev_cars is None:
+        try:
+            ev_cars = query_ev_car_zones(team_id=team_id)
+            _save_cache("ev_car_zones", ev_cars, team_id)
+        except Exception as e:
+            print(f"  [경고] EV 차량 존 조회 실패: {e}")
+            ev_cars = {}
+    else:
+        print(f"  EV 차량 존 캐시: {len(ev_cars)}개")
+    for z in zones:
+        zid = int(z.get('zone_id', 0))
+        ec = ev_cars.get(zid, ev_cars.get(str(zid), {}))
+        z['ev_car_count'] = ec.get('ev_car_count', 0)
+        z['ev_charged_count'] = ec.get('ev_charged_count', 0)
+        z['has_ev'] = z['ev_car_count'] > 0
+        z['has_charged_ev'] = z.get('ev_zone') is not None
 
     # 존에 충전소 매칭 (ev_zone 설정 후 실행 — 충전보장존 판별에 사용)
     match_ev_to_zones(ev_data, zones)

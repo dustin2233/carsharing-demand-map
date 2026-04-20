@@ -330,7 +330,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             payload = json.dumps({
                 'model': model,
                 'messages': messages,
-                'max_tokens': 4000,
+                'max_tokens': 16000,
                 'temperature': 0.5,
             }).encode()
             request = req_lib.Request(
