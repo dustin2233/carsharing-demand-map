@@ -2815,38 +2815,67 @@ ZONE_JS = """
                     '<div class="popup-row"><span class="popup-label">가동률</span><b>' + (ev.utilization_rate || 0).toFixed(1) + '%</b></div>' +
                     '</div>';
             }
+            // 충전기 정보를 EV 칼럼 하단에 포함
+            right += (function() {
+                if (!z.ev_detail || z.ev_detail.length === 0) return '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div><div style="font-size:10px;color:#bbb;font-weight:600;">⚡ 현장 충전기 없음</div>';
+                var same = z.ev_detail.filter(function(e) { return e.same; });
+                var nearby = z.ev_detail.filter(function(e) { return !e.same; });
+                var h = '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>';
+                if (same.length > 0) {
+                    var sTotal = same.reduce(function(s,e) { return s+e.total; }, 0);
+                    var sFast = same.reduce(function(s,e) { return s+e.fast; }, 0);
+                    var sSlow = same.reduce(function(s,e) { return s+e.slow; }, 0);
+                    h += '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 현장 충전기 ' + sTotal + '기 (급속 ' + sFast + ' / 완속 ' + sSlow + ')</div>';
+                    same.forEach(function(e) {
+                        var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
+                        h += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:10px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:9px">(' + label + ')</span></span></div>';
+                    });
+                } else {
+                    h += '<div style="font-size:10px;color:#bbb;font-weight:600;">⚡ 현장 충전기 없음</div>';
+                }
+                if (nearby.length > 0) {
+                    h += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-top:4px;margin-bottom:2px;">인근 충전소</div>';
+                    nearby.forEach(function(e) {
+                        h += '<div class="popup-row"><span class="popup-label" style="font-size:9px">' + e.dist + 'm</span><span style="font-size:9px;color:#8b95a5">' + e.name + ' ' + e.total + '기</span></div>';
+                    });
+                }
+                return h;
+            })();
             right += '</div>';
         }
 
-        // ── 하단: 충전 인프라 + 버튼 (전체 너비) ──
-        var evChargerHtml = (function() {
-            if (!z.ev_detail || z.ev_detail.length === 0) return '<div class="popup-row"><span class="popup-label">⚡ 충전기</span><span style="color:#bbb">100m 내 없음</span></div>';
-            var same = z.ev_detail.filter(function(e) { return e.same; });
-            var nearby = z.ev_detail.filter(function(e) { return !e.same; });
-            var html = '';
-            if (same.length > 0) {
-                var sTotal = same.reduce(function(s,e) { return s+e.total; }, 0);
-                var sFast = same.reduce(function(s,e) { return s+e.fast; }, 0);
-                var sSlow = same.reduce(function(s,e) { return s+e.slow; }, 0);
-                html += '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 현장 충전기 ' + sTotal + '기 (급속 ' + sFast + ' / 완속 ' + sSlow + ')</div>';
-                same.forEach(function(e) {
-                    var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
-                    html += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:11px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:10px">(' + label + ')</span></span></div>';
-                });
-            } else {
-                html += '<div style="font-size:10px;color:#bbb;font-weight:600;margin-bottom:4px;">⚡ 현장 충전기 없음</div>';
-            }
-            if (nearby.length > 0) {
-                html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-top:6px;margin-bottom:2px;">인근 충전소</div>';
-                nearby.forEach(function(e) {
-                    html += '<div class="popup-row"><span class="popup-label" style="font-size:10px">' + e.dist + 'm</span><span style="font-size:10px;color:#8b95a5">' + e.name + ' ' + e.total + '기</span></div>';
-                });
-            }
-            return html;
-        })();
+        // ── 충전기 정보 (EV 존 없을 때만 하단에 표시) ──
+        var chargerBottom = '';
+        if (!hasEv) {
+            chargerBottom = (function() {
+                if (!z.ev_detail || z.ev_detail.length === 0) return '<div class="popup-row"><span class="popup-label">⚡ 충전기</span><span style="color:#bbb">100m 내 없음</span></div>';
+                var same = z.ev_detail.filter(function(e) { return e.same; });
+                var nearby = z.ev_detail.filter(function(e) { return !e.same; });
+                var html = '';
+                if (same.length > 0) {
+                    var sTotal = same.reduce(function(s,e) { return s+e.total; }, 0);
+                    var sFast = same.reduce(function(s,e) { return s+e.fast; }, 0);
+                    var sSlow = same.reduce(function(s,e) { return s+e.slow; }, 0);
+                    html += '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 현장 충전기 ' + sTotal + '기 (급속 ' + sFast + ' / 완속 ' + sSlow + ')</div>';
+                    same.forEach(function(e) {
+                        var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
+                        html += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:11px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:10px">(' + label + ')</span></span></div>';
+                    });
+                } else {
+                    html += '<div style="font-size:10px;color:#bbb;font-weight:600;margin-bottom:4px;">⚡ 현장 충전기 없음</div>';
+                }
+                if (nearby.length > 0) {
+                    html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-top:6px;margin-bottom:2px;">인근 충전소</div>';
+                    nearby.forEach(function(e) {
+                        html += '<div class="popup-row"><span class="popup-label" style="font-size:10px">' + e.dist + 'm</span><span style="font-size:10px;color:#8b95a5">' + e.name + ' ' + e.total + '기</span></div>';
+                    });
+                }
+                return html;
+            })();
+        }
 
         var bottom = '<div style="border-top:1px solid #f0f1f3;margin:8px 0 6px;"></div>' +
-            evChargerHtml +
+            chargerBottom +
             '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
 
         if (hasEv) {
