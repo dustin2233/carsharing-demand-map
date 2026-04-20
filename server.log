@@ -104,3 +104,4 @@ BrokenPipeError: [Errno 32] Broken pipe
 127.0.0.1 - - [17/Apr/2026 19:02:36] "GET /api/ai-config HTTP/1.1" 200 -
 127.0.0.1 - - [17/Apr/2026 19:02:36] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
 127.0.0.1 - - [20/Apr/2026 10:26:18] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 10:32:40] "GET /api/status HTTP/1.1" 200 -

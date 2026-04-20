@@ -1195,11 +1195,35 @@ def match_ev_to_zones(ev_data, zones_data, radius_km=0.1):
         z['ev_fast'] = sum(e['fast'] for e in nearby)
         z['ev_slow'] = sum(e['slow'] for e in nearby)
         z['ev_total'] = sum(e['total'] for e in nearby)
-        # 충전소별 상세 (이름 + 기수)
-        z['ev_detail'] = [{'name': e['statNm'], 'fast': e['fast'], 'slow': e['slow'], 'total': e['total'],
-                           'dist': round(haversine_km(zlat, zlng, e['lat'], e['lng']) * 1000)}
-                          for e in nearby]
-        z['ev_detail'].sort(key=lambda x: x['dist'])
+        # 충전소별 상세 (이름 + 기수 + 동일현장 판별)
+        zname = z.get('zone_name', '').replace(' ', '')
+        pname = z.get('parking_name', '').replace(' ', '')
+        z['ev_detail'] = []
+        for e in nearby:
+            ename = e['statNm'].replace(' ', '')
+            # 존/주차장 이름이 충전소 이름에 포함되거나 그 반대면 동일 현장
+            is_same = False
+            for kw in [zname, pname]:
+                if len(kw) >= 2 and (kw in ename or ename in kw):
+                    is_same = True
+                    break
+                # 3글자 이상 부분 매칭
+                for i in range(len(kw) - 2):
+                    sub = kw[i:i+3]
+                    if sub in ename:
+                        is_same = True
+                        break
+                if is_same:
+                    break
+            z['ev_detail'].append({
+                'name': ename, 'fast': e['fast'], 'slow': e['slow'], 'total': e['total'],
+                'dist': round(haversine_km(zlat, zlng, e['lat'], e['lng']) * 1000),
+                'same': is_same
+            })
+        z['ev_detail'].sort(key=lambda x: (not x['same'], x['dist']))
+        z['ev_same_total'] = sum(e['total'] for e in z['ev_detail'] if e['same'])
+        z['ev_same_fast'] = sum(e['fast'] for e in z['ev_detail'] if e['same'])
+        z['ev_same_slow'] = sum(e['slow'] for e in z['ev_detail'] if e['same'])
 
 
 def query_closed_zones(team_id='gyeonggi'):
@@ -2689,12 +2713,27 @@ ZONE_JS = """
             profitHtml +
             (function() {
                 if (!z.ev_detail || z.ev_detail.length === 0) return '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div><div class="popup-row"><span class="popup-label">⚡ 충전기</span><span style="color:#bbb">100m 내 없음</span></div>';
-                var html = '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>' +
-                    '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 충전 인프라 (100m 내 ' + z.ev_stations + '개소, ' + z.ev_total + '기)</div>';
-                z.ev_detail.forEach(function(e) {
-                    var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? ' + ' : '') + (e.slow > 0 ? '완속' + e.slow : '');
-                    html += '<div class="popup-row"><span class="popup-label" style="font-size:10px">' + e.dist + 'm</span><span style="font-size:11px">' + e.name + ' <b style="color:#43a047">' + e.total + '기</b> <span style="color:#8b95a5;font-size:10px">(' + label + ')</span></span></div>';
-                });
+                var same = z.ev_detail.filter(function(e) { return e.same; });
+                var nearby = z.ev_detail.filter(function(e) { return !e.same; });
+                var html = '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>';
+                if (same.length > 0) {
+                    var sTotal = same.reduce(function(s,e) { return s+e.total; }, 0);
+                    var sFast = same.reduce(function(s,e) { return s+e.fast; }, 0);
+                    var sSlow = same.reduce(function(s,e) { return s+e.slow; }, 0);
+                    html += '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 현장 충전기 ' + sTotal + '기 (급속 ' + sFast + ' / 완속 ' + sSlow + ')</div>';
+                    same.forEach(function(e) {
+                        var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
+                        html += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:11px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:10px">(' + label + ')</span></span></div>';
+                    });
+                } else {
+                    html += '<div style="font-size:10px;color:#bbb;font-weight:600;margin-bottom:4px;">⚡ 현장 충전기 없음</div>';
+                }
+                if (nearby.length > 0) {
+                    html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-top:6px;margin-bottom:2px;">인근 충전소</div>';
+                    nearby.forEach(function(e) {
+                        html += '<div class="popup-row"><span class="popup-label" style="font-size:10px">' + e.dist + 'm</span><span style="font-size:10px;color:#8b95a5">' + e.name + ' ' + e.total + '기</span></div>';
+                    });
+                }
                 return html;
             })() +
             '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
