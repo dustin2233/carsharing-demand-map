@@ -1131,11 +1131,17 @@ def query_ev_chargers(team_id='gyeonggi'):
             try:
                 with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
                     data = json.loads(resp.read())
-                items = data.get('items', data.get('body', {}).get('items', []))
+                items_wrapper = data.get('items', {})
+                if isinstance(items_wrapper, dict):
+                    items = items_wrapper.get('item', [])
+                elif isinstance(items_wrapper, list):
+                    items = items_wrapper
+                else:
+                    items = []
                 if not items:
                     break
                 all_chargers.extend(items)
-                total = int(data.get('totalCount', data.get('body', {}).get('totalCount', 0)))
+                total = int(data.get('totalCount', 0))
                 if page * 9999 >= total:
                     break
                 page += 1
