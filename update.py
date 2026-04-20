@@ -2765,79 +2765,94 @@ ZONE_JS = """
     function makePopup(z) {
         var d2d = z.is_d2d_car_exportable === 'ABLE' ? '부름 가능' : '부름 불가';
         var d2dColor = z.is_d2d_car_exportable === 'ABLE' ? '#27ae60' : '#e74c3c';
-        var contractHtml = '';
+        var hasEv = !!z.ev_zone;
+        var w = hasEv ? 'min-width:520px;' : '';
+
+        // ── 왼쪽: 원본존 ──
+        var left = '<div style="' + (hasEv ? 'flex:1;min-width:240px;' : '') + '">' +
+            '<div class="popup-title">' + z.zone_name + '</div>' +
+            '<div class="popup-row"><span class="popup-label">존 ID</span><span style="font-family:monospace;color:#aab0c4">' + z.zone_id + '</span></div>' +
+            '<div class="popup-row"><span class="popup-label">주차장</span><span>' + z.parking_name + '</span></div>' +
+            '<div class="popup-row"><span class="popup-label">주소</span><span>' + z.address + '</span></div>' +
+            '<div class="popup-row"><span class="popup-label">차량</span><span><b>' + z.car_count + '</b>대</span></div>' +
+            '<div class="popup-row"><span class="popup-label">유형</span><span class="popup-badge" style="background:' + zoneColor(z.imaginary) + '">' + zoneLabel(z.imaginary) + '</span></div>' +
+            '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + d2dColor + ';font-weight:600">' + d2d + '</span></div>';
         if (z.provider_name || z.settlement_type || z.price_per_car) {
-            contractHtml = '<div class="popup-section">' +
-                '<div class="popup-section-title">거래처 정보</div>' +
+            left += '<div class="popup-section"><div class="popup-section-title">거래처 정보</div>' +
                 (z.provider_name ? '<div class="popup-row"><span class="popup-label">사업자</span><span>' + z.provider_name + '</span></div>' : '') +
                 (z.settlement_type ? '<div class="popup-row"><span class="popup-label">정산방식</span><span>' + z.settlement_type + '</span></div>' : '') +
                 (z.price_per_car ? '<div class="popup-row"><span class="popup-label">대당 주차비</span><span><b>' + fmtNum(z.price_per_car) + '원</b>/월</span></div>' : '') +
                 '</div>';
         }
-        var profitHtml = '';
         if (z.total_revenue > 0) {
-            profitHtml = '<div class="popup-section">' +
-                '<div class="popup-section-title">실적 <span style="font-weight:400;font-size:10px;color:#8890a4;margin-left:4px;">최근 4주</span></div>' +
+            left += '<div class="popup-section"><div class="popup-section-title">실적 <span style="font-weight:400;font-size:10px;color:#8890a4;margin-left:4px;">최근 4주</span></div>' +
                 '<div class="popup-row"><span class="popup-label">존 매출(4주)</span><b>' + fmtNum(z.total_revenue) + '원</b></div>' +
                 '<div class="popup-row"><span class="popup-label">대당 매출</span><b>' + fmtNum(z.revenue_per_car_28d) + '원</b></div>' +
                 '<div class="popup-row"><span class="popup-label">대당 GP</span><b>' + fmtNum(z.gp_per_car_28d) + '원</b></div>' +
                 '<div class="popup-row"><span class="popup-label">가동률</span><b>' + (z.utilization_rate || 0).toFixed(1) + '%</b></div>' +
                 '</div>';
         }
-        return '<div class="popup-title">' + z.zone_name + '</div>' +
-            '<div class="popup-row"><span class="popup-label">존 ID</span><span style="font-family:monospace;color:#aab0c4">' + z.zone_id + '</span></div>' +
-            '<div class="popup-row"><span class="popup-label">주차장</span><span>' + z.parking_name + '</span></div>' +
-            '<div class="popup-row"><span class="popup-label">주소</span><span>' + z.address + '</span></div>' +
-            '<div class="popup-row"><span class="popup-label">차량</span><span><b>' + z.car_count + '</b>대</span></div>' +
-            '<div class="popup-row"><span class="popup-label">유형</span><span class="popup-badge" style="background:' + zoneColor(z.imaginary) + '">' + zoneLabel(z.imaginary) + '</span></div>' +
-            '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + d2dColor + ';font-weight:600">' + d2d + '</span></div>' +
-            contractHtml +
-            profitHtml +
-            (function() {
-                if (!z.ev_detail || z.ev_detail.length === 0) return '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div><div class="popup-row"><span class="popup-label">⚡ 충전기</span><span style="color:#bbb">100m 내 없음</span></div>';
-                var same = z.ev_detail.filter(function(e) { return e.same; });
-                var nearby = z.ev_detail.filter(function(e) { return !e.same; });
-                var html = '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>';
-                if (same.length > 0) {
-                    var sTotal = same.reduce(function(s,e) { return s+e.total; }, 0);
-                    var sFast = same.reduce(function(s,e) { return s+e.fast; }, 0);
-                    var sSlow = same.reduce(function(s,e) { return s+e.slow; }, 0);
-                    html += '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 현장 충전기 ' + sTotal + '기 (급속 ' + sFast + ' / 완속 ' + sSlow + ')</div>';
-                    same.forEach(function(e) {
-                        var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
-                        html += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:11px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:10px">(' + label + ')</span></span></div>';
-                    });
-                } else {
-                    html += '<div style="font-size:10px;color:#bbb;font-weight:600;margin-bottom:4px;">⚡ 현장 충전기 없음</div>';
-                }
-                if (nearby.length > 0) {
-                    html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-top:6px;margin-bottom:2px;">인근 충전소</div>';
-                    nearby.forEach(function(e) {
-                        html += '<div class="popup-row"><span class="popup-label" style="font-size:10px">' + e.dist + 'm</span><span style="font-size:10px;color:#8b95a5">' + e.name + ' ' + e.total + '기</span></div>';
-                    });
-                }
-                return html;
-            })() +
-            (function() {
-                if (!z.ev_zone) return '';
-                var ev = z.ev_zone;
-                var evD2d = ev.is_d2d ? '부름 가능' : '부름 불가';
-                var evD2dColor = ev.is_d2d ? '#27ae60' : '#e74c3c';
-                return '<div style="border-top:2px solid #1565c0;margin:10px 0 6px;"></div>' +
-                    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><span style="background:#1565c0;color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:4px;">충전보장 EV</span><span style="font-size:13px;font-weight:700;">' + ev.zone_name + '</span></div>' +
-                    '<div class="popup-row"><span class="popup-label">존 ID</span><span style="font-family:monospace;color:#aab0c4">' + ev.zone_id + '</span></div>' +
-                    '<div class="popup-row"><span class="popup-label">차량</span><span><b>' + ev.car_count + '</b>대</span></div>' +
-                    '<div class="popup-row"><span class="popup-label">유형</span><span class="popup-badge" style="background:' + zoneColor(ev.imaginary) + '">' + zoneLabel(ev.imaginary) + '</span></div>' +
-                    '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + evD2dColor + ';font-weight:600">' + evD2d + '</span></div>' +
-                    (ev.total_revenue > 0 ? '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>' +
-                        '<div style="font-size:10px;color:#1565c0;font-weight:700;margin-bottom:4px;">실적 <span style="font-weight:500;color:#8b95a5;">최근 4주</span></div>' +
-                        '<div class="popup-row"><span class="popup-label">존 매출(4주)</span><b>' + fmtNum(ev.total_revenue) + '원</b></div>' +
-                        '<div class="popup-row"><span class="popup-label">대당 매출</span><b>' + fmtNum(ev.revenue_per_car_28d) + '원</b></div>' +
-                        '<div class="popup-row"><span class="popup-label">대당 GP</span><b>' + fmtNum(ev.gp_per_car_28d) + '원</b></div>' +
-                        '<div class="popup-row"><span class="popup-label">가동률</span><b>' + (ev.utilization_rate || 0).toFixed(1) + '%</b></div>'
-                    : '');
-            })() +
+        left += '</div>';
+
+        // ── 오른쪽: EV 가상존 (있을 때만) ──
+        var right = '';
+        if (hasEv) {
+            var ev = z.ev_zone;
+            var evD2d = ev.is_d2d ? '부름 가능' : '부름 불가';
+            var evD2dColor = ev.is_d2d ? '#27ae60' : '#e74c3c';
+            right = '<div style="flex:1;min-width:240px;border-left:2px solid #1565c0;padding-left:14px;">' +
+                '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><span style="background:#1565c0;color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;">충전보장 EV</span></div>' +
+                '<div class="popup-title" style="font-size:13px;">' + ev.zone_name + '</div>' +
+                '<div class="popup-row"><span class="popup-label">존 ID</span><span style="font-family:monospace;color:#aab0c4">' + ev.zone_id + '</span></div>' +
+                '<div class="popup-row"><span class="popup-label">차량</span><span><b>' + ev.car_count + '</b>대</span></div>' +
+                '<div class="popup-row"><span class="popup-label">유형</span><span class="popup-badge" style="background:' + zoneColor(ev.imaginary) + '">' + zoneLabel(ev.imaginary) + '</span></div>' +
+                '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + evD2dColor + ';font-weight:600">' + evD2d + '</span></div>';
+            if (ev.total_revenue > 0) {
+                right += '<div class="popup-section"><div class="popup-section-title" style="color:#1565c0;">실적 <span style="font-weight:400;font-size:10px;color:#8890a4;margin-left:4px;">최근 4주</span></div>' +
+                    '<div class="popup-row"><span class="popup-label">존 매출(4주)</span><b>' + fmtNum(ev.total_revenue) + '원</b></div>' +
+                    '<div class="popup-row"><span class="popup-label">대당 매출</span><b>' + fmtNum(ev.revenue_per_car_28d) + '원</b></div>' +
+                    '<div class="popup-row"><span class="popup-label">대당 GP</span><b>' + fmtNum(ev.gp_per_car_28d) + '원</b></div>' +
+                    '<div class="popup-row"><span class="popup-label">가동률</span><b>' + (ev.utilization_rate || 0).toFixed(1) + '%</b></div>' +
+                    '</div>';
+            }
+            right += '</div>';
+        }
+
+        // ── 하단: 충전 인프라 + 버튼 (전체 너비) ──
+        var evChargerHtml = (function() {
+            if (!z.ev_detail || z.ev_detail.length === 0) return '<div class="popup-row"><span class="popup-label">⚡ 충전기</span><span style="color:#bbb">100m 내 없음</span></div>';
+            var same = z.ev_detail.filter(function(e) { return e.same; });
+            var nearby = z.ev_detail.filter(function(e) { return !e.same; });
+            var html = '';
+            if (same.length > 0) {
+                var sTotal = same.reduce(function(s,e) { return s+e.total; }, 0);
+                var sFast = same.reduce(function(s,e) { return s+e.fast; }, 0);
+                var sSlow = same.reduce(function(s,e) { return s+e.slow; }, 0);
+                html += '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 현장 충전기 ' + sTotal + '기 (급속 ' + sFast + ' / 완속 ' + sSlow + ')</div>';
+                same.forEach(function(e) {
+                    var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
+                    html += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:11px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:10px">(' + label + ')</span></span></div>';
+                });
+            } else {
+                html += '<div style="font-size:10px;color:#bbb;font-weight:600;margin-bottom:4px;">⚡ 현장 충전기 없음</div>';
+            }
+            if (nearby.length > 0) {
+                html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-top:6px;margin-bottom:2px;">인근 충전소</div>';
+                nearby.forEach(function(e) {
+                    html += '<div class="popup-row"><span class="popup-label" style="font-size:10px">' + e.dist + 'm</span><span style="font-size:10px;color:#8b95a5">' + e.name + ' ' + e.total + '기</span></div>';
+                });
+            }
+            return html;
+        })();
+
+        var bottom = '<div style="border-top:1px solid #f0f1f3;margin:8px 0 6px;"></div>' +
+            evChargerHtml +
             '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
+
+        if (hasEv) {
+            return '<div style="' + w + '"><div style="display:flex;gap:14px;">' + left + right + '</div>' + bottom + '</div>';
+        }
+        return left + bottom;
     }
 """
 
@@ -3574,7 +3589,8 @@ resLayer.addTo(map);
 var zoneLayer = L.layerGroup();
 var allZoneMarkers = [];
 zonesData.forEach(function(z) {{
-    var m = L.marker([z.lat, z.lng], {{ icon: makeZoneIcon(z) }}).bindPopup(makePopup(z)).on('click', function() {{ showTimeline(z.zone_id, z.zone_name); }});
+    var popupOpts = z.ev_zone ? {{ maxWidth: 560 }} : {{ maxWidth: 300 }};
+    var m = L.marker([z.lat, z.lng], {{ icon: makeZoneIcon(z) }}).bindPopup(makePopup(z), popupOpts).on('click', function() {{ showTimeline(z.zone_id, z.zone_name); }});
     m._zoneData = z;
     allZoneMarkers.push(m);
     zoneLayer.addLayer(m);
