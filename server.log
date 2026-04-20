@@ -1,110 +1,13 @@
-127.0.0.1 - - [17/Apr/2026 15:39:40] "GET /api/status HTTP/1.1" 200 -
-----------------------------------------
-Exception occurred during processing of request from ('127.0.0.1', 51069)
-Traceback (most recent call last):
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 318, in _handle_request_noblock
-    self.process_request(request, client_address)
-    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 349, in process_request
-    self.finish_request(request, client_address)
-    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 362, in finish_request
-    self.RequestHandlerClass(request, client_address, self)
-    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/dustin/carsharing_demand_map/server.py", line 50, in __init__
-    super().__init__(*args, directory=DIR, **kwargs)
-    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 732, in __init__
-    super().__init__(*args, **kwargs)
-    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 766, in __init__
-    self.handle()
-    ~~~~~~~~~~~^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 496, in handle
-    self.handle_one_request()
-    ~~~~~~~~~~~~~~~~~~~~~~~^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 484, in handle_one_request
-    method()
-    ~~~~~~^^
-  File "/Users/dustin/carsharing_demand_map/server.py", line 85, in do_GET
-    super().do_GET()
-    ~~~~~~~~~~~~~~^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 739, in do_GET
-    self.copyfile(f, self.wfile)
-    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 942, in copyfile
-    shutil.copyfileobj(source, outputfile)
-    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/shutil.py", line 257, in copyfileobj
-    fdst_write(buf)
-    ~~~~~~~~~~^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 845, in write
-    self._sock.sendall(b)
-    ~~~~~~~~~~~~~~~~~~^^^
-BrokenPipeError: [Errno 32] Broken pipe
-----------------------------------------
-127.0.0.1 - - [17/Apr/2026 16:24:17] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 16:33:08] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 16:33:41] "GET /api/ai-config HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 16:40:38] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
-----------------------------------------
-Exception occurred during processing of request from ('127.0.0.1', 51173)
-Traceback (most recent call last):
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 318, in _handle_request_noblock
-    self.process_request(request, client_address)
-    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 349, in process_request
-    self.finish_request(request, client_address)
-    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 362, in finish_request
-    self.RequestHandlerClass(request, client_address, self)
-    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/dustin/carsharing_demand_map/server.py", line 50, in __init__
-    super().__init__(*args, directory=DIR, **kwargs)
-    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 732, in __init__
-    super().__init__(*args, **kwargs)
-    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 766, in __init__
-    self.handle()
-    ~~~~~~~~~~~^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 496, in handle
-    self.handle_one_request()
-    ~~~~~~~~~~~~~~~~~~~~~~~^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 484, in handle_one_request
-    method()
-    ~~~~~~^^
-  File "/Users/dustin/carsharing_demand_map/server.py", line 78, in do_GET
-    self.handle_dashboard()
-    ~~~~~~~~~~~~~~~~~~~~~^^
-  File "/Users/dustin/carsharing_demand_map/server.py", line 290, in handle_dashboard
-    self._send_json(200, {
-    ~~~~~~~~~~~~~~~^^^^^^^
-        'team_id': team_id,
-        ^^^^^^^^^^^^^^^^^^^
-    ...<5 lines>...
-        'generated_at': dashboard_metrics.get('generated_at') or get_last_update(LAST_UPDATE_ZONE),
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    })
-    ^^
-  File "/Users/dustin/carsharing_demand_map/server.py", line 102, in _send_json
-    self.wfile.write(body)
-    ~~~~~~~~~~~~~~~~^^^^^^
-  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 845, in write
-    self._sock.sendall(b)
-    ~~~~~~~~~~~~~~~~~~^^^
-BrokenPipeError: [Errno 32] Broken pipe
-----------------------------------------
-127.0.0.1 - - [17/Apr/2026 16:40:57] "GET /api/ai-config HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 16:40:58] "GET /api/ai-config HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 16:40:59] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 18:43:30] "POST /api/d2d-destinations HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 18:44:00] "POST /api/d2d-destinations HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 18:47:36] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 19:02:36] "GET /api/ai-config HTTP/1.1" 200 -
-127.0.0.1 - - [17/Apr/2026 19:02:36] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
-127.0.0.1 - - [20/Apr/2026 10:26:18] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [20/Apr/2026 10:32:40] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [20/Apr/2026 10:39:10] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [20/Apr/2026 11:09:20] "GET /api/ai-config HTTP/1.1" 200 -
-127.0.0.1 - - [20/Apr/2026 11:09:20] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:15:36] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:15:36] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:15:47] "POST /api/update-zone HTTP/1.1" 429 -
+127.0.0.1 - - [20/Apr/2026 11:15:50] "POST /api/update-zone HTTP/1.1" 429 -
+127.0.0.1 - - [20/Apr/2026 11:16:54] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:19:47] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:25:25] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:25:25] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:31:20] "POST /api/update-zone HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:31:20] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:32:02] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:32:06] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [20/Apr/2026 11:32:39] "POST /api/dashboard-analyze HTTP/1.1" 200 -

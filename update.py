@@ -1182,7 +1182,14 @@ def query_ev_chargers(team_id='gyeonggi'):
     result = list(stations.values())
     for s in result:
         s['total'] = s['fast'] + s['slow']
-    print(f"  충전소 API: {len(all_chargers)}건 → {len(result)}개 충전소 집계")
+    # 팀 관할 polygon 필터 (좌표 기준)
+    team_poly = _get_team_polygon(team_id)
+    if team_poly:
+        before = len(result)
+        result = [s for s in result if team_poly.contains(Point(s['lng'], s['lat']))]
+        print(f"  충전소 API: {len(all_chargers)}건 → {before}개 → polygon 필터 후 {len(result)}개 충전소")
+    else:
+        print(f"  충전소 API: {len(all_chargers)}건 → {len(result)}개 충전소 집계")
     return result
 
 
@@ -4987,6 +4994,22 @@ def update_zone(team_id='gyeonggi'):
     for name, data in [("zones", zones), ("profit", profit_data), ("parking_contract", parking_contract),
                        ("gcar", gcar_data), ("closed", closed_data), ("socar_supply", socar_supply), ("timeline", timeline_data)]:
         _save_cache(name, data, team_id=team_id)
+
+    # 대시보드 주간 지표 생성 (dashboard.html 의존)
+    print("  +1 대시보드 주간 지표 생성...")
+    dashboard_metrics = query_dashboard_metrics(team_id=team_id)
+    print(f"       {len(dashboard_metrics.get('weekly', []))} 주 데이터")
+    _save_cache("dashboard_metrics", dashboard_metrics, team_id=team_id)
+
+    print("  +2 지역별(region2) 주간 지표 생성...")
+    dashboard_region2 = query_dashboard_by_region(team_id=team_id, region_level='region2')
+    print(f"       {len(dashboard_region2.get('weekly', []))} rows")
+    _save_cache("dashboard_region2", dashboard_region2, team_id=team_id)
+
+    print("  +3 지역별(region3) 주간 지표 생성...")
+    dashboard_region3 = query_dashboard_by_region(team_id=team_id, region_level='region3')
+    print(f"       {len(dashboard_region3.get('weekly', []))} rows")
+    _save_cache("dashboard_region3", dashboard_region3, team_id=team_id)
 
     _build_html(team_id=team_id)
     print("[완료] 존/실적 업데이트 완료")

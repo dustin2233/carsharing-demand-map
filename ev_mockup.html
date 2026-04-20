@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>충전 혼잡도 목업</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f5f7; display: flex; justify-content: center; padding: 40px 20px; gap: 30px; flex-wrap: wrap; }
+
+.popup {
+    background: #fff; border-radius: 14px; padding: 20px; width: 320px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+}
+.popup-title { font-size: 16px; font-weight: 800; margin-bottom: 12px; color: #1a1a1a; }
+.popup-row { display: flex; gap: 6px; align-items: center; padding: 3px 0; font-size: 13px; }
+.popup-label { color: #8b95a5; min-width: 72px; font-size: 11px; font-weight: 600; }
+.section-title { font-size: 10px; color: #43a047; font-weight: 700; margin: 12px 0 6px; }
+.ev-row { display: flex; gap: 6px; align-items: center; padding: 2px 0; font-size: 11px; }
+.ev-dist { color: #43a047; min-width: 35px; font-size: 10px; font-weight: 600; }
+.ev-nearby-dist { color: #8b95a5; min-width: 35px; font-size: 10px; }
+.ev-name { color: #1a1a1a; }
+.ev-count { font-weight: 700; }
+.ev-type { color: #8b95a5; font-size: 10px; }
+.nearby-title { font-size: 10px; color: #8b95a5; font-weight: 600; margin-top: 8px; margin-bottom: 2px; }
+.nearby-name { color: #8b95a5; font-size: 10px; }
+
+/* 혼잡도 차트 */
+.congestion { margin-top: 10px; }
+.congestion-title { font-size: 10px; color: #43a047; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.congestion-hint { font-size: 9px; color: #8b95a5; font-weight: 500; }
+.day-tabs { display: flex; gap: 3px; margin-bottom: 8px; }
+.day-tab {
+    padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 600;
+    border: 1px solid #e8eaed; background: #fff; color: #8b95a5; cursor: pointer;
+}
+.day-tab.active { background: #43a047; color: #fff; border-color: #43a047; }
+.chart { display: flex; align-items: flex-end; gap: 1px; height: 40px; }
+.bar {
+    flex: 1; border-radius: 2px 2px 0 0; min-width: 3px;
+    transition: all 0.2s;
+}
+.bar.low { background: #c8e6c9; }
+.bar.mid { background: #81c784; }
+.bar.high { background: #ef5350; }
+.time-labels { display: flex; justify-content: space-between; margin-top: 3px; }
+.time-labels span { font-size: 9px; color: #aab0c4; }
+
+.divider { border-top: 1px solid #f0f1f3; margin: 10px 0; }
+
+.label-row { display: flex; gap: 8px; margin-top: 4px; }
+.label-item { display: flex; align-items: center; gap: 3px; font-size: 9px; color: #8b95a5; }
+.label-dot { width: 8px; height: 8px; border-radius: 2px; }
+
+h2 { width: 100%; text-align: center; color: #1a1a1a; font-size: 14px; margin-bottom: -10px; }
+.desc { width: 100%; text-align: center; color: #8b95a5; font-size: 12px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<h2>존 팝업에 추가되는 모습 (목업)</h2>
+<div class="desc">아래는 실제 존 팝업 하단에 표시될 충전 인프라 섹션입니다</div>
+
+<!-- 충전기 있는 존 -->
+<div class="popup">
+    <div class="popup-title">센트럴돔 그랑트리</div>
+    <div class="popup-row"><span class="popup-label">존 ID</span><span style="font-family:monospace;color:#aab0c4">17602</span></div>
+    <div class="popup-row"><span class="popup-label">차량</span><span><b>14</b>대</span></div>
+    <div class="popup-row"><span class="popup-label">가동률</span><span><b>45.8</b>%</span></div>
+
+    <div class="divider"></div>
+
+    <div class="section-title">⚡ 현장 충전기 9기 (급속 0 / 완속 9)</div>
+    <div class="ev-row">
+        <span class="ev-dist">48m</span>
+        <span class="ev-name">시흥센트럴돔그랑트리캐슬 <b>9기</b> <span class="ev-type">(완속9)</span></span>
+    </div>
+
+    <!-- 혼잡도 차트 -->
+    <div class="congestion">
+        <div class="congestion-title">
+            충전 혼잡도 <span class="congestion-hint">최근 2주 평균</span>
+        </div>
+        <div class="day-tabs">
+            <div class="day-tab active">월</div>
+            <div class="day-tab">화</div>
+            <div class="day-tab">수</div>
+            <div class="day-tab">목</div>
+            <div class="day-tab">금</div>
+            <div class="day-tab">토</div>
+            <div class="day-tab">일</div>
+        </div>
+        <div class="chart">
+            <div class="bar low" style="height:10%"></div>
+            <div class="bar low" style="height:5%"></div>
+            <div class="bar low" style="height:5%"></div>
+            <div class="bar low" style="height:5%"></div>
+            <div class="bar low" style="height:5%"></div>
+            <div class="bar low" style="height:8%"></div>
+            <div class="bar low" style="height:15%"></div>
+            <div class="bar low" style="height:20%"></div>
+            <div class="bar mid" style="height:35%"></div>
+            <div class="bar mid" style="height:45%"></div>
+            <div class="bar mid" style="height:50%"></div>
+            <div class="bar high" style="height:65%"></div>
+            <div class="bar high" style="height:70%"></div>
+            <div class="bar high" style="height:60%"></div>
+            <div class="bar mid" style="height:55%"></div>
+            <div class="bar mid" style="height:50%"></div>
+            <div class="bar mid" style="height:45%"></div>
+            <div class="bar mid" style="height:40%"></div>
+            <div class="bar mid" style="height:50%"></div>
+            <div class="bar high" style="height:65%"></div>
+            <div class="bar high" style="height:75%"></div>
+            <div class="bar mid" style="height:55%"></div>
+            <div class="bar mid" style="height:35%"></div>
+            <div class="bar low" style="height:20%"></div>
+        </div>
+        <div class="time-labels">
+            <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+        </div>
+        <div class="label-row">
+            <div class="label-item"><div class="label-dot" style="background:#c8e6c9"></div>여유</div>
+            <div class="label-item"><div class="label-dot" style="background:#81c784"></div>보통</div>
+            <div class="label-item"><div class="label-dot" style="background:#ef5350"></div>혼잡</div>
+        </div>
+    </div>
+
+    <div class="nearby-title">인근 충전소</div>
+    <div class="ev-row">
+        <span class="ev-nearby-dist">45m</span>
+        <span class="nearby-name">럭스나인은계 11기</span>
+    </div>
+    <div class="ev-row">
+        <span class="ev-nearby-dist">59m</span>
+        <span class="nearby-name">럭스나인은계오피스텔 7기</span>
+    </div>
+</div>
+
+<!-- 충전기 없는 존 -->
+<div class="popup">
+    <div class="popup-title">○○ 주차장</div>
+    <div class="popup-row"><span class="popup-label">차량</span><span><b>5</b>대</span></div>
+    <div class="popup-row"><span class="popup-label">가동률</span><span><b>38.2</b>%</span></div>
+
+    <div class="divider"></div>
+
+    <div style="font-size:10px;color:#bbb;font-weight:600;">⚡ 현장 충전기 없음</div>
+    <div class="nearby-title">인근 충전소</div>
+    <div class="ev-row">
+        <span class="ev-nearby-dist">85m</span>
+        <span class="nearby-name">○○공영주차장 3기</span>
+    </div>
+</div>
+
+</body>
+</html>
