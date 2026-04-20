@@ -1233,6 +1233,79 @@ def match_ev_to_zones(ev_data, zones_data, radius_km=0.1):
         z['ev_same_slow'] = sum(e['slow'] for e in z['ev_detail'] if e['same'])
 
 
+def query_ev_virtual_zones(team_id='gyeonggi'):
+    """충전보장형 전기차 가상존 조회 — original_zone_id로 원본존에 매핑"""
+    region_filter = _region1_sql_col(team_id, 'z.region_1')
+    sql = f"""
+    WITH ev_zones AS (
+      SELECT z.legacy_zone_id AS zone_id, cz.zone_name, z.parking_id, cz.imaginary,
+             cz.is_d2d_car_exportable,
+             (SELECT COUNT(DISTINCT ci.id) FROM `socar-data.tianjin_replica.car_info` ci
+              WHERE ci.zone_id = z.legacy_zone_id AND ci.state IN (4,5) AND ci.level = 1) AS car_count
+      FROM `socar-data.socar_zone.zone` z
+      JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
+      WHERE z.incidental = 1 AND cz.zone_name LIKE '%전기차%' AND cz.state = 1
+        AND {region_filter}
+    ),
+    original AS (
+      SELECT z.legacy_zone_id AS zone_id, z.parking_id
+      FROM `socar-data.socar_zone.zone` z
+      JOIN `socar-data.tianjin_replica.carzone_info` cz ON cz.id = z.legacy_zone_id
+      WHERE z.incidental = 0 AND cz.state = 1
+    ),
+    profit AS (
+      SELECT zone_id,
+             SUM(revenue) AS total_revenue,
+             ROUND(SAFE_DIVIDE(SUM(revenue)*28, NULLIF(SUM(opr_day),0))) AS revenue_per_car_28d,
+             ROUND(SAFE_DIVIDE(SUM(profit)*28, NULLIF(SUM(opr_day),0))) AS gp_per_car_28d
+      FROM `socar-data.socar_biz_profit.profit_socar_car_daily`
+      WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 28 DAY)
+        AND car_sharing_type IN ('socar','zplus')
+      GROUP BY zone_id
+    ),
+    util AS (
+      SELECT zone_id,
+             ROUND(SAFE_DIVIDE(SUM(op_min), SUM(dp_min) - SUM(bl_min)) * 100, 1) AS utilization_rate
+      FROM `socar-data.socar_biz.operation_per_car_daily_v2`
+      WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 28 DAY)
+      GROUP BY zone_id
+    )
+    SELECT ev.zone_id, ev.zone_name, ev.car_count, ev.imaginary, ev.is_d2d_car_exportable,
+           o.zone_id AS original_zone_id,
+           COALESCE(p.total_revenue, 0) AS total_revenue,
+           COALESCE(p.revenue_per_car_28d, 0) AS revenue_per_car_28d,
+           COALESCE(p.gp_per_car_28d, 0) AS gp_per_car_28d,
+           COALESCE(u.utilization_rate, 0) AS utilization_rate
+    FROM ev_zones ev
+    JOIN original o ON o.parking_id = ev.parking_id
+    LEFT JOIN profit p ON p.zone_id = ev.zone_id
+    LEFT JOIN util u ON u.zone_id = ev.zone_id
+    """
+    cmd = ["bq", "query", "--use_legacy_sql=false", "--format=json", "--max_rows=500", sql]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+    if result.returncode != 0:
+        print(f"  [경고] EV 가상존 조회 실패: {result.stderr[:300]}")
+        return []
+    rows = json.loads(result.stdout)
+    # original_zone_id → ev_zone 매핑
+    ev_map = {}
+    for r in rows:
+        oid = int(r['original_zone_id'])
+        ev_map[oid] = {
+            'zone_id': int(r['zone_id']),
+            'zone_name': r['zone_name'],
+            'car_count': int(r['car_count']),
+            'imaginary': int(r.get('imaginary', 0)),
+            'is_d2d': r.get('is_d2d_car_exportable', '') == 'ABLE',
+            'total_revenue': int(float(r.get('total_revenue', 0))),
+            'revenue_per_car_28d': int(float(r.get('revenue_per_car_28d', 0))),
+            'gp_per_car_28d': int(float(r.get('gp_per_car_28d', 0))),
+            'utilization_rate': float(r.get('utilization_rate', 0)),
+        }
+    print(f"  EV 가상존: {len(ev_map)}개 (원본존 매핑)")
+    return ev_map
+
+
 def query_closed_zones(team_id='gyeonggi'):
     """폐쇄 존 현황: 과거 운영 이력이 있으나 현재 미운영인 모든 존"""
     z_region_filter = _region1_sql_col(team_id, 'z.region_1')
@@ -2671,10 +2744,12 @@ ZONE_JS = """
         var color = zoneColor(z.imaginary);
         var size = Math.max(22, Math.min(38, 18 + z.car_count * 2));
         var label = z.car_count > 0 ? z.car_count : '';
+        var evBadge = z.ev_zone ? '<div style="position:absolute;top:-6px;right:-6px;background:#1565c0;color:#fff;font-size:7px;font-weight:800;padding:1px 3px;border-radius:3px;white-space:nowrap;">EV</div>' : '';
         var html = '<div class="zone-pin" style="' +
             'width:' + size + 'px;height:' + size + 'px;' +
             'background:' + color + ';' +
-            '">' + label + '</div>';
+            'position:relative;' +
+            '">' + label + evBadge + '</div>';
         return L.divIcon({
             className: 'zone-marker-wrap',
             html: html,
@@ -2742,6 +2817,25 @@ ZONE_JS = """
                     });
                 }
                 return html;
+            })() +
+            (function() {
+                if (!z.ev_zone) return '';
+                var ev = z.ev_zone;
+                var evD2d = ev.is_d2d ? '부름 가능' : '부름 불가';
+                var evD2dColor = ev.is_d2d ? '#27ae60' : '#e74c3c';
+                return '<div style="border-top:2px solid #1565c0;margin:10px 0 6px;"></div>' +
+                    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><span style="background:#1565c0;color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:4px;">충전보장 EV</span><span style="font-size:13px;font-weight:700;">' + ev.zone_name + '</span></div>' +
+                    '<div class="popup-row"><span class="popup-label">존 ID</span><span style="font-family:monospace;color:#aab0c4">' + ev.zone_id + '</span></div>' +
+                    '<div class="popup-row"><span class="popup-label">차량</span><span><b>' + ev.car_count + '</b>대</span></div>' +
+                    '<div class="popup-row"><span class="popup-label">유형</span><span class="popup-badge" style="background:' + zoneColor(ev.imaginary) + '">' + zoneLabel(ev.imaginary) + '</span></div>' +
+                    '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + evD2dColor + ';font-weight:600">' + evD2d + '</span></div>' +
+                    (ev.total_revenue > 0 ? '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>' +
+                        '<div style="font-size:10px;color:#1565c0;font-weight:700;margin-bottom:4px;">실적 <span style="font-weight:500;color:#8b95a5;">최근 4주</span></div>' +
+                        '<div class="popup-row"><span class="popup-label">존 매출(4주)</span><b>' + fmtNum(ev.total_revenue) + '원</b></div>' +
+                        '<div class="popup-row"><span class="popup-label">대당 매출</span><b>' + fmtNum(ev.revenue_per_car_28d) + '원</b></div>' +
+                        '<div class="popup-row"><span class="popup-label">대당 GP</span><b>' + fmtNum(ev.gp_per_car_28d) + '원</b></div>' +
+                        '<div class="popup-row"><span class="popup-label">가동률</span><b>' + (ev.utilization_rate || 0).toFixed(1) + '%</b></div>'
+                    : '');
             })() +
             '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
     }
@@ -3617,6 +3711,7 @@ evData.forEach(function(e) {{
         return Math.sqrt(dlat*dlat + dlng*dlng) <= 0.1;
     }});
     if (nearZone) return;
+    if (e.total < 3) return;
     var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
     L.circleMarker([e.lat, e.lng], {{
         radius: Math.max(5, Math.min(12, 4 + e.total)),
@@ -4704,6 +4799,28 @@ def regenerate_from_cache(team_id='gyeonggi'):
         print(f"  충전소 캐시: {len(ev_data)}개 충전소")
     # 존에 충전소 매칭
     match_ev_to_zones(ev_data, zones)
+
+    # EV 가상존 매핑
+    ev_vz = _load_cache("ev_virtual_zones", team_id)
+    if ev_vz is None:
+        try:
+            ev_vz = query_ev_virtual_zones(team_id=team_id)
+            _save_cache("ev_virtual_zones", ev_vz, team_id)
+        except Exception as e:
+            print(f"  [경고] EV 가상존 조회 실패: {e}")
+            ev_vz = {}
+    else:
+        if isinstance(ev_vz, list):
+            ev_vz = {}
+        print(f"  EV 가상존 캐시: {len(ev_vz)}개")
+    # 존 데이터에 EV 가상존 정보 추가
+    for z in zones:
+        zid = int(z.get('zone_id', 0))
+        if zid in ev_vz:
+            z['ev_zone'] = ev_vz[zid]
+        elif isinstance(ev_vz, dict):
+            # string key fallback
+            z['ev_zone'] = ev_vz.get(str(zid), None)
 
     # 쏘카 지역별 실 운영 차량 로드
     socar_supply = _load_cache("socar_supply", team_id) or {}
