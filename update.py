@@ -1195,7 +1195,11 @@ def match_ev_to_zones(ev_data, zones_data, radius_km=0.1):
         z['ev_fast'] = sum(e['fast'] for e in nearby)
         z['ev_slow'] = sum(e['slow'] for e in nearby)
         z['ev_total'] = sum(e['total'] for e in nearby)
-        z['ev_names'] = ', '.join(set(e['statNm'] for e in nearby))[:80] if nearby else ''
+        # 충전소별 상세 (이름 + 기수)
+        z['ev_detail'] = [{'name': e['statNm'], 'fast': e['fast'], 'slow': e['slow'], 'total': e['total'],
+                           'dist': round(haversine_km(zlat, zlng, e['lat'], e['lng']) * 1000)}
+                          for e in nearby]
+        z['ev_detail'].sort(key=lambda x: x['dist'])
 
 
 def query_closed_zones(team_id='gyeonggi'):
@@ -2683,7 +2687,16 @@ ZONE_JS = """
             '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + d2dColor + ';font-weight:600">' + d2d + '</span></div>' +
             contractHtml +
             profitHtml +
-            (z.ev_total > 0 ? '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div><div class="popup-row"><span class="popup-label">⚡ 충전기</span><span><b style="color:#43a047">' + z.ev_total + '기</b> (급속 ' + z.ev_fast + ' / 완속 ' + z.ev_slow + ')</span></div>' + (z.ev_names ? '<div class="popup-row"><span class="popup-label">충전소</span><span style="font-size:10px">' + z.ev_names + '</span></div>' : '') : '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div><div class="popup-row"><span class="popup-label">⚡ 충전기</span><span style="color:#bbb">100m 내 없음</span></div>') +
+            (function() {
+                if (!z.ev_detail || z.ev_detail.length === 0) return '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div><div class="popup-row"><span class="popup-label">⚡ 충전기</span><span style="color:#bbb">100m 내 없음</span></div>';
+                var html = '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>' +
+                    '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 충전 인프라 (100m 내 ' + z.ev_stations + '개소, ' + z.ev_total + '기)</div>';
+                z.ev_detail.forEach(function(e) {
+                    var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? ' + ' : '') + (e.slow > 0 ? '완속' + e.slow : '');
+                    html += '<div class="popup-row"><span class="popup-label" style="font-size:10px">' + e.dist + 'm</span><span style="font-size:11px">' + e.name + ' <b style="color:#43a047">' + e.total + '기</b> <span style="color:#8b95a5;font-size:10px">(' + label + ')</span></span></div>';
+                });
+                return html;
+            })() +
             '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
     }
 """
