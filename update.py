@@ -1228,6 +1228,10 @@ def match_ev_to_zones(ev_data, zones_data, radius_km=0.1):
                 'same': is_same
             })
         z['ev_detail'].sort(key=lambda x: (not x['same'], x['dist']))
+        # 충전보장 EV 존인데 이름 매칭된 현장 충전기가 없으면, 가장 가까운 충전소를 현장으로 간주
+        has_ev_zone = z.get('ev_zone') is not None
+        if has_ev_zone and not any(e['same'] for e in z['ev_detail']) and z['ev_detail']:
+            z['ev_detail'][0]['same'] = True
         z['ev_same_total'] = sum(e['total'] for e in z['ev_detail'] if e['same'])
         z['ev_same_fast'] = sum(e['fast'] for e in z['ev_detail'] if e['same'])
         z['ev_same_slow'] = sum(e['slow'] for e in z['ev_detail'] if e['same'])
@@ -4860,10 +4864,7 @@ def regenerate_from_cache(team_id='gyeonggi'):
             ev_data = []
     else:
         print(f"  충전소 캐시: {len(ev_data)}개 충전소")
-    # 존에 충전소 매칭
-    match_ev_to_zones(ev_data, zones)
-
-    # EV 가상존 매핑
+    # EV 가상존 매핑 (충전소 매칭보다 먼저 — 충전보장존 판별에 필요)
     ev_vz = _load_cache("ev_virtual_zones", team_id)
     if ev_vz is None:
         try:
@@ -4884,6 +4885,9 @@ def regenerate_from_cache(team_id='gyeonggi'):
         elif isinstance(ev_vz, dict):
             # string key fallback
             z['ev_zone'] = ev_vz.get(str(zid), None)
+
+    # 존에 충전소 매칭 (ev_zone 설정 후 실행 — 충전보장존 판별에 사용)
+    match_ev_to_zones(ev_data, zones)
 
     # 쏘카 지역별 실 운영 차량 로드
     socar_supply = _load_cache("socar_supply", team_id) or {}
