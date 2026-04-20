@@ -3590,7 +3590,9 @@ var zoneLayer = L.layerGroup();
 var allZoneMarkers = [];
 zonesData.forEach(function(z) {{
     var popupOpts = z.ev_zone ? {{ maxWidth: 560 }} : {{ maxWidth: 300 }};
-    var m = L.marker([z.lat, z.lng], {{ icon: makeZoneIcon(z) }}).bindPopup(makePopup(z), popupOpts).on('click', function() {{ showTimeline(z.zone_id, z.zone_name); }});
+    var evZoneId = z.ev_zone ? z.ev_zone.zone_id : null;
+    var evZoneName = z.ev_zone ? z.ev_zone.zone_name : null;
+    var m = L.marker([z.lat, z.lng], {{ icon: makeZoneIcon(z) }}).bindPopup(makePopup(z), popupOpts).on('click', (function(zid, zname, eid, ename) {{ return function() {{ showTimeline(zid, zname, eid, ename); }}; }})(z.zone_id, z.zone_name, evZoneId, evZoneName));
     m._zoneData = z;
     allZoneMarkers.push(m);
     zoneLayer.addLayer(m);
@@ -4226,26 +4228,8 @@ function runUpdateZone() {{
 // 예약 타임라인 렌더링
 var wayColors = {{ 'round':'#5c6bc0', 'handle':'#5c6bc0', 'd2d_oneway':'#00897b', 'd2d_round':'#43a047', 'd2d_rev':'#43a047', 'z2d_oneway':'#00897b', 'block':'#555c6e' }};
 var wayLabels = {{ 'round':'', 'handle':'', 'd2d_oneway':'부름', 'd2d_round':'부름', 'd2d_rev':'부름', 'z2d_oneway':'부름', 'block':'블락' }};
-function showTimeline(zoneId, zoneName) {{
-    var panel = document.getElementById('timelinePanel');
-    var content = document.getElementById('timelineContent');
-    document.getElementById('timelineTitle').textContent = zoneName + ' — 예약 현황';
-    var reservations = timelineData[String(zoneId)] || [];
-    if (reservations.length === 0) {{
-        content.innerHTML = '<div style="color:#999;padding:20px;text-align:center">예약 데이터 없음</div>';
-        panel.style.display = 'block';
-        return;
-    }}
-    // 날짜 범위: 오늘 ±7일
-    var now = new Date();
-    var startDate = new Date(now); startDate.setDate(startDate.getDate() - 7); startDate.setHours(0,0,0,0);
-    var endDate = new Date(now); endDate.setDate(endDate.getDate() + 7); endDate.setHours(23,59,59,999);
-    var totalMs = endDate - startDate;
-    var days = [];
-    for (var d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {{
-        days.push(new Date(d));
-    }}
-    // 차량별 그룹핑
+function buildTimelineTable(reservations, days, now, startDate, endDate) {{
+    var dayNames = ['일','월','화','수','목','금','토'];
     var cars = {{}};
     var carOrder = [];
     reservations.forEach(function(r) {{
@@ -4253,12 +4237,8 @@ function showTimeline(zoneId, zoneName) {{
         if (!cars[key]) {{ cars[key] = {{ car_name: r.car_name, car_num: r.car_num, reservations: [] }}; carOrder.push(key); }}
         cars[key].reservations.push(r);
     }});
-    // 요일 이름
-    var dayNames = ['일','월','화','수','목','금','토'];
-    // 테이블 생성
     var numDays = days.length;
     var html = '<table style="border-collapse:collapse;font-size:10px;width:100%;min-width:600px;color:#1a1a1a;table-layout:fixed;">';
-    // colgroup으로 너비 고정
     html += '<colgroup><col style="width:110px;min-width:110px;">';
     for (var ci = 0; ci < numDays; ci++) html += '<col style="width:' + (100/numDays).toFixed(2) + '%;">';
     html += '</colgroup>';
@@ -4287,14 +4267,12 @@ function showTimeline(zoneId, zoneName) {{
                 var rs = new Date(rv.start.replace(' ', 'T'));
                 var re = new Date(rv.end.replace(' ', 'T'));
                 if (re < dayStart || rs > dayEnd) return;
-                // 이 날이 예약의 시작일인 경우만 바를 그림 (연속 표시)
                 var isFirstDay = rs >= dayStart;
-                if (!isFirstDay && di > 0) return;  // 시작일이 아니면 스킵 (첫날 바가 overflow로 커버)
+                if (!isFirstDay && di > 0) return;
                 var barStartPx = Math.max(0, (rs - dayStart) / 86400000) * 100;
                 var totalSpanMs = Math.min(endDate.getTime(), re.getTime()) - Math.max(startDate.getTime(), rs.getTime());
-                var oneDayMs = 86400000;
-                var barWidthDays = totalSpanMs / oneDayMs;
-                var barWidthPct = barWidthDays * 100;  // 100% = 1 day cell width
+                var barWidthDays = totalSpanMs / 86400000;
+                var barWidthPct = barWidthDays * 100;
                 if (barWidthPct < 5) barWidthPct = 5;
                 var color = rv.block ? wayColors['block'] : (wayColors[rv.way] || '#90a4ae');
                 var lbl = rv.block ? wayLabels['block'] : (wayLabels[rv.way] || '');
@@ -4306,6 +4284,46 @@ function showTimeline(zoneId, zoneName) {{
         html += '</tr>';
     }});
     html += '</tbody></table>';
+    return html;
+}}
+
+function showTimeline(zoneId, zoneName, evZoneId, evZoneName) {{
+    var panel = document.getElementById('timelinePanel');
+    var content = document.getElementById('timelineContent');
+    document.getElementById('timelineTitle').textContent = zoneName + ' — 예약 현황';
+    var reservations = timelineData[String(zoneId)] || [];
+    var evReservations = evZoneId ? (timelineData[String(evZoneId)] || []) : [];
+
+    if (reservations.length === 0 && evReservations.length === 0) {{
+        content.innerHTML = '<div style="color:#999;padding:20px;text-align:center">예약 데이터 없음</div>';
+        panel.style.display = 'block';
+        return;
+    }}
+    var now = new Date();
+    var startDate = new Date(now); startDate.setDate(startDate.getDate() - 7); startDate.setHours(0,0,0,0);
+    var endDate = new Date(now); endDate.setDate(endDate.getDate() + 7); endDate.setHours(23,59,59,999);
+    var days = [];
+    for (var d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {{
+        days.push(new Date(d));
+    }}
+
+    var html = '';
+    // 원본존 타임라인
+    if (reservations.length > 0) {{
+        html += '<div style="font-size:11px;color:#8b95a5;font-weight:500;margin-bottom:6px;">차량별 예약 타임라인 (전후 1주)</div>';
+        html += buildTimelineTable(reservations, days, now, startDate, endDate);
+    }}
+    // EV 가상존 타임라인
+    if (evReservations.length > 0) {{
+        html += '<div style="margin-top:14px;padding-top:10px;border-top:2px solid #1565c0;">';
+        html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><span style="background:#1565c0;color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;">충전보장 EV</span><span style="font-size:11px;color:#8b95a5;font-weight:500;">' + evZoneName + '</span></div>';
+        html += buildTimelineTable(evReservations, days, now, startDate, endDate);
+        html += '</div>';
+    }} else if (evZoneId) {{
+        html += '<div style="margin-top:14px;padding-top:10px;border-top:2px solid #1565c0;">';
+        html += '<div style="display:flex;align-items:center;gap:6px;"><span style="background:#1565c0;color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;">충전보장 EV</span><span style="font-size:11px;color:#999;">' + evZoneName + ' — 예약 없음</span></div>';
+        html += '</div>';
+    }}
     // 범례
     html += '<div style="margin-top:10px;display:flex;gap:12px;font-size:10px;flex-wrap:wrap;color:#8b95a5;font-weight:500;">';
     [['handle','일반','#5c6bc0'],['d2d_round','부름왕복','#43a047'],['d2d_oneway','부름편도','#00897b'],['block','블락','#555c6e']].forEach(function(x) {{
