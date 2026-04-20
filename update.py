@@ -3037,7 +3037,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         </div>
         <button class="sidebar-btn" id="toggleGcar"><span class="dot" style="background:#ef5350"></span>그린카 존</button>
         <button class="sidebar-btn" id="toggleClosed"><span class="dot" style="background:#616161"></span>폐쇄 존</button>
-        <button class="sidebar-btn" id="toggleEv"><span class="dot" style="background:#43a047"></span>충전 인프라</button>
+        <button class="sidebar-btn" id="toggleEv"><span class="dot" style="background:#1565c0"></span>충전 인프라</button>
     </div>
     <div class="sidebar-section">
         <div class="sidebar-section-title">분석</div>
@@ -3620,14 +3620,14 @@ evData.forEach(function(e) {{
     var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
     L.circleMarker([e.lat, e.lng], {{
         radius: Math.max(5, Math.min(12, 4 + e.total)),
-        fillColor: '#43a047', color: '#2e7d32', weight: 1.5, opacity: 0.8, fillOpacity: 0.4
+        fillColor: '#1565c0', color: '#0d47a1', weight: 1.5, opacity: 0.8, fillOpacity: 0.4
     }}).bindPopup(
         '<div class="popup-title">⚡ ' + e.statNm + '</div>' +
         '<div class="popup-row"><span class="popup-label">주소</span><span>' + e.addr + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">운영기관</span><span>' + e.busiNm + '</span></div>' +
-        '<div class="popup-row"><span class="popup-label">충전기</span><span><b style="color:#43a047">' + e.total + '기</b> (' + label + ')</span></div>' +
+        '<div class="popup-row"><span class="popup-label">충전기</span><span><b style="color:#1565c0">' + e.total + '기</b> (' + label + ')</span></div>' +
         '<div class="popup-row"><span class="popup-label">이용시간</span><span>' + (e.useTime || '정보없음') + '</span></div>' +
-        '<div style="margin-top:6px;padding:4px 8px;background:#f0faf0;border-radius:6px;font-size:10px;color:#2e7d32;font-weight:600;">쏘카 미운영 · EV존 개설 후보</div>'
+        '<div style="margin-top:6px;padding:4px 8px;background:#e3f2fd;border-radius:6px;font-size:10px;color:#0d47a1;font-weight:600;">쏘카 미운영 · EV존 개설 후보</div>'
     ).addTo(evLayer);
 }});
 

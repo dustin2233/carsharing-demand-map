@@ -330,7 +330,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             payload = json.dumps({
                 'model': model,
                 'messages': messages,
-                'max_tokens': 2000,
+                'max_tokens': 4000,
                 'temperature': 0.5,
             }).encode()
             request = req_lib.Request(
@@ -343,7 +343,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             )
             with req_lib.urlopen(request, timeout=90) as resp:
                 result = json.loads(resp.read())
-            text = result['choices'][0]['message']['content']
+            msg = result['choices'][0]['message']
+            text = msg.get('content')
+            if not text:
+                # tool_call 응답이거나 content가 null인 경우
+                print(f"[{datetime.now()}] LLM 응답 content 없음: {str(result)[:500]}")
+                raise ValueError(f"LLM이 텍스트 응답을 반환하지 않았습니다. (finish_reason: {result['choices'][0].get('finish_reason')})")
             self._send_json(200, {'result': text})
         except Exception as e:
             self._send_json(500, {'error': str(e)})

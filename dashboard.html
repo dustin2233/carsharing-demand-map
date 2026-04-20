@@ -1799,7 +1799,7 @@ function appendMsg(role, content) {
 }
 
 function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function appendAiMsg(content) {
@@ -1809,7 +1809,7 @@ function appendAiMsg(content) {
   const div = document.createElement('div');
   div.className = 'chat-msg ai';
   // Render markdown-like formatting
-  const rendered = content
+  const rendered = (content || '(응답 없음)')
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/### (.*?)(\n|$)/g, '<div style="font-weight:700;color:#1e293b;margin-top:8px;margin-bottom:2px">$1</div>')
     .replace(/## (.*?)(\n|$)/g, '<div style="font-weight:800;color:#0064FF;margin-top:10px;margin-bottom:3px">$1</div>')
@@ -1856,16 +1856,42 @@ function buildDataContext() {
   const W1 = ds.now[_li], W2 = ds.now[_li-1], Y1 = ds.yoy[_li];
   if (!W1) return '';
   const pct = (v, base) => { if (v==null||base==null||base===0) return '-'; const c=((v-base)/Math.abs(base)*100); return (c>0?'+':'')+c.toFixed(1)+'%'; };
+  const chgLbl = period === 'monthly' ? 'MoM' : 'WoW';
+  const periodLbl = period==='weekly' ? `W${W1.isoweek}주차` : period==='monthly' ? '최근월' : 'YTD';
   const lines = [
-    `[현재 데이터 컨텍스트] ${period==='weekly'?`W${W1.isoweek}주차`:period==='monthly'?'최근월':'YTD'} 기준${region?' / 지역: '+region:''}`,
-    `대당매출: ${fmt(W1.rev_per_car,'krw')}원 (WoW ${pct(W1.rev_per_car,W2?.rev_per_car)}, YoY ${pct(W1.rev_per_car,Y1?.rev_per_car)})`,
-    `GPM: ${fmt(W1.gpm,'pct')} (WoW ${pct(W1.gpm,W2?.gpm)}, YoY ${pct(W1.gpm,Y1?.gpm)})`,
+    `[현재 데이터 컨텍스트] ${periodLbl} 기준${region?' / 지역: '+region:''}`,
+    `대당매출: ${fmt(W1.rev_per_car,'krw')}원 (${chgLbl} ${pct(W1.rev_per_car,W2?.rev_per_car)}, YoY ${pct(W1.rev_per_car,Y1?.rev_per_car)})`,
+    `GPM: ${fmt(W1.gpm,'pct')} (${chgLbl} ${pct(W1.gpm,W2?.gpm)}, YoY ${pct(W1.gpm,Y1?.gpm)})`,
     `주중가동률: ${fmt(W1.opr_weekday,'pct')} / 주말가동률: ${fmt(W1.opr_weekend,'pct')}`,
-    `이용건수: ${fmt(W1.use_count,'cnt')}건 (WoW ${pct(W1.use_count,W2?.use_count)}, YoY ${pct(W1.use_count,Y1?.use_count)})`,
+    `이용건수: ${fmt(W1.use_count,'cnt')}건 (${chgLbl} ${pct(W1.use_count,W2?.use_count)}, YoY ${pct(W1.use_count,Y1?.use_count)})`,
     `왕복 ${fmt(W1.round_count,'cnt')}건(${fmt(W1.round_rev_per_use,'krw')}원) / 편도 ${fmt(W1.oneway_count,'cnt')}건(${fmt(W1.oneway_rev_per_use,'krw')}원) / 부름 ${fmt(W1.d2d_count,'cnt')}건(${fmt(W1.d2d_rev_per_use,'krw')}원)`,
     `수요접속: ${fmt(W1.attempt,'cnt')}건, 실패율: ${fmt(W1.fail_rate,'pct')}, 결제시도: ${fmt(W1.payment_attempt,'cnt')}건`,
     `운영대수: ${fmt(W1.car_count,'cnt')}대 / 총매출: ${fmt(W1.revenue,'krw')}원`,
   ];
+
+  // 경기도/강원도 region1별 분류 (weekly_region2 기반)
+  if (!region && D?.weekly_region2) {
+    const r2data = D.weekly_region2;
+    const isoweek = W1.isoweek, isoyear = W1.isoyear;
+    const r1Groups = {};
+    for (const row of r2data) {
+      if (row.isoweek !== isoweek || row.isoyear !== isoyear || row.period_type !== 'now') continue;
+      const r1 = row.region1 || '';
+      const key = r1.includes('강원') ? '강원도' : r1.includes('경기') ? '경기도' : r1;
+      if (!key) continue;
+      if (!r1Groups[key]) r1Groups[key] = { revenue:0, use_count:0, car_count:0, rev_total:0, car_total:0 };
+      r1Groups[key].revenue    += row.revenue    || 0;
+      r1Groups[key].use_count  += row.use_count  || 0;
+      r1Groups[key].rev_total  += row.revenue    || 0;
+      r1Groups[key].car_total  += row.car_count  || 0;
+    }
+    const r1Lines = Object.entries(r1Groups).map(([name, g]) => {
+      const rpc = g.car_total > 0 ? Math.round(g.rev_total / g.car_total) : 0;
+      return `  ${name}: 총매출 ${fmt(g.revenue,'krw')}원, 이용건수 ${fmt(g.use_count,'cnt')}건, 대당매출 ${fmt(rpc,'krw')}원`;
+    });
+    if (r1Lines.length) lines.push(`[경기/강원 구분]\n${r1Lines.join('\n')}`);
+  }
+
   return lines.join('\n');
 }
 
@@ -1911,8 +1937,9 @@ async function runAI(userText, prebuiltPrompt) {
     const data = await r.json();
     phDiv.remove();
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    appendAiMsg(data.result);
-    chatHistory.push({ role: 'assistant', content: data.result });
+    const aiText = data.result || '(응답 없음)';
+    appendAiMsg(aiText);
+    chatHistory.push({ role: 'assistant', content: aiText });
   } catch(e) {
     phDiv.remove();
     appendAiMsg('오류: ' + e.message);
