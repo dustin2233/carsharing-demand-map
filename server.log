@@ -140,3 +140,4 @@ OSError: [Errno 48] Address already in use
 127.0.0.1 - - [21/Apr/2026 18:42:52] "GET /api/ai-config HTTP/1.1" 200 -
 127.0.0.1 - - [21/Apr/2026 18:42:52] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
 127.0.0.1 - - [21/Apr/2026 18:44:23] "POST /api/dashboard-analyze HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 18:50:19] "GET /api/status HTTP/1.1" 200 -

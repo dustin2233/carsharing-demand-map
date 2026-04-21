@@ -2837,9 +2837,9 @@ ZONE_JS = """
             '<span style="font-size:8px;color:#aab0c4;">12</span><span style="font-size:8px;color:#aab0c4;">18</span>' +
             '<span style="font-size:8px;color:#aab0c4;">24</span></div>' +
             '<div style="display:flex;gap:6px;margin-top:2px;">' +
-            '<span style="font-size:8px;color:#8b95a5;"><span style="display:inline-block;width:6px;height:6px;background:#c8e6c9;border-radius:1px;vertical-align:middle;margin-right:2px;"></span>여유</span>' +
-            '<span style="font-size:8px;color:#8b95a5;"><span style="display:inline-block;width:6px;height:6px;background:#81c784;border-radius:1px;vertical-align:middle;margin-right:2px;"></span>보통</span>' +
-            '<span style="font-size:8px;color:#8b95a5;"><span style="display:inline-block;width:6px;height:6px;background:#ef5350;border-radius:1px;vertical-align:middle;margin-right:2px;"></span>혼잡</span>' +
+            '<span style="font-size:8px;color:#8b95a5;"><span style="display:inline-block;width:6px;height:6px;background:#c8e6c9;border-radius:1px;vertical-align:middle;margin-right:2px;"></span>여유 &lt;30%</span>' +
+            '<span style="font-size:8px;color:#8b95a5;"><span style="display:inline-block;width:6px;height:6px;background:#81c784;border-radius:1px;vertical-align:middle;margin-right:2px;"></span>보통 30~60%</span>' +
+            '<span style="font-size:8px;color:#8b95a5;"><span style="display:inline-block;width:6px;height:6px;background:#ef5350;border-radius:1px;vertical-align:middle;margin-right:2px;"></span>혼잡 &gt;60%</span>' +
             '</div></div>';
         return html;
     }
