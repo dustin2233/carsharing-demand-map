@@ -3758,14 +3758,16 @@ var reentryPopup = function(z) {{
         '<div class="popup-row"><span class="popup-label">대당 매출</span><span><b style="color:#0064FF">' + (z.revenue_per_car_28d||0).toLocaleString() + '</b>원/28일</span></div>' +
         '<div class="popup-row"><span class="popup-label">대당 GP</span><span><b>' + (z.gp_per_car_28d||0).toLocaleString() + '</b>원/28일</span></div>';
 }};
+var reentryMarkerMap = {{}};
 reentryData.forEach(function(z) {{
     L.circle([z.lat, z.lng], {{
         radius: 500,
         fillColor: '#ec407a', color: '#c2185b', weight: 1.5, opacity: 0.7, fillOpacity: 0.12
     }}).bindPopup(reentryPopup(z)).addTo(reentryLayer);
-    L.circleMarker([z.lat, z.lng], {{
+    var dot = L.circleMarker([z.lat, z.lng], {{
         radius: 3, fillColor: '#c2185b', color: '#c2185b', weight: 0, fillOpacity: 0.8
     }}).bindPopup(reentryPopup(z)).addTo(reentryLayer);
+    reentryMarkerMap[z.zone_id] = dot;
 }});
 
 var reentryListDiv = document.getElementById('reentryList');
@@ -3783,7 +3785,11 @@ function renderReentryList(filterRegion) {{
         row.innerHTML = '<span class="gap-name" style="font-size:12px;">' + z.zone_name + '</span>' +
             '<span class="gap-cnt" style="font-size:10px">' + demand.toLocaleString() + '/월 | ' + z.hist_car_count + '대 | ' + z.operation_days + '일</span>';
         row.style.cursor = 'pointer';
-        row.addEventListener('click', function() {{ map.setView([z.lat, z.lng], 16); }});
+        row.addEventListener('click', function() {{
+            map.setView([z.lat, z.lng], 16);
+            var m = reentryMarkerMap[z.zone_id];
+            if (m) setTimeout(function() {{ m.openPopup(); }}, 300);
+        }});
         reentryListDiv.appendChild(row);
     }});
 }}

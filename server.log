@@ -19,3 +19,8 @@ OSError: [Errno 48] Address already in use
 127.0.0.1 - - [21/Apr/2026 10:22:57] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
 127.0.0.1 - - [21/Apr/2026 10:23:30] "GET /api/status HTTP/1.1" 200 -
 127.0.0.1 - - [21/Apr/2026 10:42:06] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 10:51:41] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 11:05:07] "POST /api/update-zone HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 11:05:11] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 11:06:04] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 11:11:42] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
