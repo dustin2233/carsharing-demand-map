@@ -5017,7 +5017,7 @@ def regenerate_from_cache(team_id='gyeonggi'):
         z['ev_car_count'] = ec.get('ev_car_count', 0)
         z['ev_charged_count'] = ec.get('ev_charged_count', 0)
         z['has_ev'] = z['ev_car_count'] > 0 or z.get('ev_zone') is not None
-        z['has_charged_ev'] = z.get('ev_zone') is not None
+        z['has_charged_ev'] = z.get('ev_zone') is not None or '전기차' in z.get('zone_name', '')
 
     # 존에 충전소 매칭 (ev_zone 설정 후 실행 — 충전보장존 판별에 사용)
     match_ev_to_zones(ev_data, zones)
