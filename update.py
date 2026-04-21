@@ -4131,13 +4131,19 @@ function resetZoneLayer() {{
         zoneLayer.addLayer(m);
     }});
     applyZoneTypeFilter();
-    if (evFilterMode > 0) applyEvZoneFilter();
+    if (evFilterMode > 0) {{
+        applyEvZoneFilter();
+        // EV 필터 활성화 시 zoneLayer가 지도에 없으면 추가
+        if (!map.hasLayer(zoneLayer)) zoneLayer.addTo(map);
+    }}
 }}
 
 document.getElementById('toggleEvZones').addEventListener('click', function() {{
     if (evFilterMode === 1) {{
         evFilterMode = 0;
         styleBtn(this, false);
+        // EV 필터 해제 시 운영존 토글 상태 복원
+        if (!showZones) map.removeLayer(zoneLayer);
     }} else {{
         evFilterMode = 1;
         styleBtn(this, true);
@@ -4149,6 +4155,7 @@ document.getElementById('toggleChargedOnly').addEventListener('click', function(
     if (evFilterMode === 2) {{
         evFilterMode = 0;
         styleBtn(this, false);
+        if (!showZones) map.removeLayer(zoneLayer);
     }} else {{
         evFilterMode = 2;
         styleBtn(this, true);

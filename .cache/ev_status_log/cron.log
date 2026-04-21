@@ -103,3 +103,8 @@
 [202604211050] 수집완료: 3751건, 충전중 905건, 충전소 720개소 → /Users/dustin/carsharing_demand_map/.cache/ev_status_log/2026-04-21.jsonl
 [202604211100] 수집완료: 3207건, 충전중 834건, 충전소 678개소 → /Users/dustin/carsharing_demand_map/.cache/ev_status_log/2026-04-21.jsonl
 [202604211110] 수집완료: 3669건, 충전중 917건, 충전소 745개소 → /Users/dustin/carsharing_demand_map/.cache/ev_status_log/2026-04-21.jsonl
+[202604211120] API error (zcode=51): timed out
+[202604211120] 수집완료: 2434건, 충전중 677건, 충전소 579개소 → /Users/dustin/carsharing_demand_map/.cache/ev_status_log/2026-04-21.jsonl
+[202604211130] 수집완료: 3195건, 충전중 851건, 충전소 677개소 → /Users/dustin/carsharing_demand_map/.cache/ev_status_log/2026-04-21.jsonl
+[202604211140] 수집완료: 3590건, 충전중 885건, 충전소 738개소 → /Users/dustin/carsharing_demand_map/.cache/ev_status_log/2026-04-21.jsonl
+[202604211150] 수집완료: 3321건, 충전중 972건, 충전소 789개소 → /Users/dustin/carsharing_demand_map/.cache/ev_status_log/2026-04-21.jsonl

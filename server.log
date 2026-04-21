@@ -24,3 +24,9 @@ OSError: [Errno 48] Address already in use
 127.0.0.1 - - [21/Apr/2026 11:05:11] "GET /api/status HTTP/1.1" 200 -
 127.0.0.1 - - [21/Apr/2026 11:06:04] "GET /api/status HTTP/1.1" 200 -
 127.0.0.1 - - [21/Apr/2026 11:11:42] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 11:30:54] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 11:32:19] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 11:34:34] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 11:34:34] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 11:35:41] "POST /api/dashboard-analyze HTTP/1.1" 500 -
+127.0.0.1 - - [21/Apr/2026 11:36:11] "POST /api/dashboard-analyze HTTP/1.1" 200 -
