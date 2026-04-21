@@ -3961,15 +3961,15 @@ function renderMarketShare() {{
         if (msSortCol === 'region2') return msSortAsc ? a.region2.localeCompare(b.region2) : b.region2.localeCompare(a.region2);
         return msSortAsc ? a[msSortCol] - b[msSortCol] : b[msSortCol] - a[msSortCol];
     }});
-    var totSocar = 0, totGcar = 0;
-    marketShareData.forEach(function(d) {{ totSocar += d.socar_cars; totGcar += d.gcar_cars; }});
+    var totSocar = 0, totGcar = 0, totSocarZones = 0, totGcarZones = 0;
+    marketShareData.forEach(function(d) {{ totSocar += d.socar_cars; totGcar += d.gcar_cars; totSocarZones += d.socar_zones; totGcarZones += d.gcar_zones; }});
     var avgShare = (totSocar + totGcar) > 0 ? (totSocar / (totSocar + totGcar) * 100).toFixed(1) : '0';
     var html = '<tr style="background:#f0f4ff;">' +
         '<td style="padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;color:#1a1a1a;">' + teamTotalLabel + '</td>' +
         '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;color:#0064FF;">' + totSocar.toLocaleString() + '</td>' +
-        '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;color:#8b95a5;">-</td>' +
+        '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;color:#0064FF;">' + totSocarZones.toLocaleString() + '</td>' +
         '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;color:#ef5350;">' + totGcar.toLocaleString() + '</td>' +
-        '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;color:#8b95a5;">-</td>' +
+        '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;color:#ef5350;">' + totGcarZones.toLocaleString() + '</td>' +
         '<td style="text-align:right;padding:10px 12px;border-bottom:2px solid #e0e2e6;font-weight:800;">' + avgShare + '%</td></tr>';
     sorted.forEach(function(d, idx) {{
         var shareColor = d.socar_share < 40 ? '#c62828' : d.socar_share < 50 ? '#e65100' : d.socar_share >= 70 ? '#18a34a' : '#1a1a1a';
