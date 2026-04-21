@@ -1191,28 +1191,34 @@ function drawChart(id, cfg, ds) {
     const nPts = ds.now.length;
     const toDisp = v => v != null ? parseFloat((v * 100).toFixed(3)) : null;
 
+    const advNowW0 = toDisp(au.now?.w0?.[dayKey]);
     const advNowW1 = toDisp(au.now?.w1?.[dayKey]);
     const advNowW2 = toDisp(au.now?.w2?.[dayKey]);
+    const advYoyW0 = toDisp(au.yoy?.w0?.[dayKey]);
     const advYoyW1 = toDisp(au.yoy?.w1?.[dayKey]);
     const advYoyW2 = toDisp(au.yoy?.w2?.[dayKey]);
 
-    if (advNowW1 != null || advNowW2 != null) {
-      chartLabels = [...ds.labels, `${meta.w1_label || 'W+1'} *`, `${meta.w2_label || 'W+2'} *`];
+    if (advNowW0 != null || advNowW1 != null || advNowW2 != null) {
+      const cw = meta.curr_week || '';
+      chartLabels = [...ds.labels,
+        `${meta.w0_label || ('W' + cw)} *`,
+        `${meta.w1_label || ('W' + (cw + 1))} *`,
+        `${meta.w2_label || ('W' + (cw + 2))} *`];
 
-      // 기존 datasets 확장 (null 패딩)
-      datasets.forEach(d => { d.data = [...d.data, null, null]; });
+      // 기존 datasets 확장 (null 패딩 3개)
+      datasets.forEach(d => { d.data = [...d.data, null, null, null]; });
 
-      // 마지막 실적 → W+1 → W+2 연결선 (현재연도 색, 점선)
+      // 마지막 실적 → W → W+1 → W+2 연결선 (현재연도 색, 점선)
       const lastNow = datasets[0]?.data[nPts - 1] ?? null;
       datasets.push({
-        label: `사전가동 (스냅샷)`,
-        data: [...Array(nPts - 1).fill(null), lastNow, advNowW1, advNowW2],
+        label: `사전가동 (${meta.curr_year || 2026})`,
+        data: [...Array(nPts - 1).fill(null), lastNow, advNowW0, advNowW1, advNowW2],
         borderColor: cfg.colors[0],
         borderDash: [5, 4],
         backgroundColor: 'transparent',
         fill: false,
         tension: .2,
-        pointRadius: [0, ...Array(nPts - 1).fill(0), 0, 4, 4].slice(-(nPts + 2)),
+        pointRadius: 4,
         pointStyle: 'circle',
         borderWidth: 2,
         yAxisID: 'y',
@@ -1226,11 +1232,11 @@ function drawChart(id, cfg, ds) {
       });
 
       // YoY 사전 (점선, 회색)
-      if (advYoyW1 != null || advYoyW2 != null) {
+      if (advYoyW0 != null || advYoyW1 != null || advYoyW2 != null) {
         const lastYoy = datasets[1]?.data[nPts - 1] ?? null;
         datasets.push({
-          label: `사전가동 YoY`,
-          data: [...Array(nPts - 1).fill(null), lastYoy, advYoyW1, advYoyW2],
+          label: `사전가동 (${(meta.curr_year || 2026) - 1})`,
+          data: [...Array(nPts - 1).fill(null), lastYoy, advYoyW0, advYoyW1, advYoyW2],
           borderColor: '#94a3b8',
           borderDash: [4, 3],
           backgroundColor: 'transparent',

@@ -175,3 +175,52 @@ OSError: [Errno 48] Address already in use
 127.0.0.1 - - [21/Apr/2026 19:03:44] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
 127.0.0.1 - - [21/Apr/2026 19:06:20] "POST /api/update-zone HTTP/1.1" 200 -
 127.0.0.1 - - [21/Apr/2026 19:06:20] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+Traceback (most recent call last):
+  File "/Users/dustin/carsharing_demand_map/server.py", line 384, in <module>
+    server = http.server.HTTPServer(('', PORT), Handler)
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 457, in __init__
+    self.server_bind()
+    ~~~~~~~~~~~~~~~~^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 148, in server_bind
+    socketserver.TCPServer.server_bind(self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 478, in server_bind
+    self.socket.bind(self.server_address)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 48] Address already in use
+127.0.0.1 - - [21/Apr/2026 21:53:57] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 21:54:18] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 21:54:18] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [21/Apr/2026 21:57:12] "POST /api/dashboard-analyze HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:24:21] "POST /api/update-zone HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:24:21] "POST /api/update-zone HTTP/1.1" 429 -
+127.0.0.1 - - [22/Apr/2026 08:26:32] "POST /api/update-demand HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:26:32] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:26:56] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:27:04] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:27:04] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:28:33] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+Traceback (most recent call last):
+  File "/Users/dustin/carsharing_demand_map/server.py", line 384, in <module>
+    server = http.server.HTTPServer(('', PORT), Handler)
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 457, in __init__
+    self.server_bind()
+    ~~~~~~~~~~~~~~~~^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 148, in server_bind
+    socketserver.TCPServer.server_bind(self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 478, in server_bind
+    self.socket.bind(self.server_address)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 48] Address already in use
+127.0.0.1 - - [22/Apr/2026 08:30:31] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:30:47] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:31:11] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:31:20] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:31:20] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:38:23] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:38:24] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:40:01] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:40:02] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:44:09] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 08:44:09] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -

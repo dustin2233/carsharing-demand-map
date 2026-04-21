@@ -2263,7 +2263,9 @@ def query_advance_utilization(team_id='gyeonggi'):
 
     this_monday = ddate.fromisocalendar(curr_year, curr_week, 1)
 
-    # 현재 W+1, W+2 날짜 범위
+    # 현재 W, W+1, W+2 날짜 범위
+    w0_start = this_monday
+    w0_end   = this_monday + timedelta(days=6)
     w1_start = this_monday + timedelta(weeks=1)
     w1_end   = this_monday + timedelta(weeks=2, days=-1)
     w2_start = this_monday + timedelta(weeks=2)
@@ -2278,6 +2280,8 @@ def query_advance_utilization(team_id='gyeonggi'):
     ly_week = min(curr_week, max_week_ly)
     ly_monday = ddate.fromisocalendar(ly_year, ly_week, 1)
 
+    ly_w0_start = ly_monday
+    ly_w0_end   = ly_monday + timedelta(days=6)
     ly_w1_start = ly_monday + timedelta(weeks=1)
     ly_w1_end   = ly_monday + timedelta(weeks=2, days=-1)
     ly_w2_start = ly_monday + timedelta(weeks=2)
@@ -2293,7 +2297,8 @@ def query_advance_utilization(team_id='gyeonggi'):
     sql = f"""
     WITH base AS (
       SELECT 'now' AS period,
-        CASE WHEN s.date BETWEEN '{w1_start}' AND '{w1_end}' THEN 'w1'
+        CASE WHEN s.date BETWEEN '{w0_start}' AND '{w0_end}' THEN 'w0'
+             WHEN s.date BETWEEN '{w1_start}' AND '{w1_end}' THEN 'w1'
              WHEN s.date BETWEEN '{w2_start}' AND '{w2_end}' THEN 'w2'
         END AS wk,
         CASE WHEN EXTRACT(DAYOFWEEK FROM s.date) IN (1,7) THEN 'weekend' ELSE 'weekday' END AS day_type,
@@ -2301,11 +2306,12 @@ def query_advance_utilization(team_id='gyeonggi'):
       FROM `socar-data.socar_biz_base.operation_per_car_daily_v2_snapshot` s
       JOIN `socar-data.socar_zone.zone` z ON z.id = s.zone_id
       WHERE s.snapshot_at >= '{snap_now}' AND s.snapshot_at < '{snap_now_next}'
-        AND s.date BETWEEN '{w1_start}' AND '{w2_end}'
+        AND s.date BETWEEN '{w0_start}' AND '{w2_end}'
         AND z.region_1 IN ({r1_quoted})
       UNION ALL
       SELECT 'yoy' AS period,
-        CASE WHEN s.date BETWEEN '{ly_w1_start}' AND '{ly_w1_end}' THEN 'w1'
+        CASE WHEN s.date BETWEEN '{ly_w0_start}' AND '{ly_w0_end}' THEN 'w0'
+             WHEN s.date BETWEEN '{ly_w1_start}' AND '{ly_w1_end}' THEN 'w1'
              WHEN s.date BETWEEN '{ly_w2_start}' AND '{ly_w2_end}' THEN 'w2'
         END AS wk,
         CASE WHEN EXTRACT(DAYOFWEEK FROM s.date) IN (1,7) THEN 'weekend' ELSE 'weekday' END AS day_type,
@@ -2313,7 +2319,7 @@ def query_advance_utilization(team_id='gyeonggi'):
       FROM `socar-data.socar_biz_base.operation_per_car_daily_v2_snapshot` s
       JOIN `socar-data.socar_zone.zone` z ON z.id = s.zone_id
       WHERE s.snapshot_at >= '{snap_yoy}' AND s.snapshot_at < '{snap_yoy_next}'
-        AND s.date BETWEEN '{ly_w1_start}' AND '{ly_w2_end}'
+        AND s.date BETWEEN '{ly_w0_start}' AND '{ly_w2_end}'
         AND z.region_1 IN ({r1_quoted})
     )
     SELECT period, wk, day_type, SAFE_DIVIDE(SUM(op_min), SUM(dp_min)) AS util_rate
@@ -2323,13 +2329,15 @@ def query_advance_utilization(team_id='gyeonggi'):
     ORDER BY period, wk, day_type
     """
 
-    rows = run_bq(sql, max_rows=20)
+    rows = run_bq(sql, max_rows=30)
+    empty = lambda: {'weekday': None, 'weekend': None}
     result = {
-        'now': {'w1': {'weekday': None, 'weekend': None}, 'w2': {'weekday': None, 'weekend': None}},
-        'yoy': {'w1': {'weekday': None, 'weekend': None}, 'w2': {'weekday': None, 'weekend': None}},
+        'now': {'w0': empty(), 'w1': empty(), 'w2': empty()},
+        'yoy': {'w0': empty(), 'w1': empty(), 'w2': empty()},
         'meta': {
             'curr_week': curr_week,
             'curr_year': curr_year,
+            'w0_label': f'W{curr_week}',
             'w1_label': f'W{curr_week + 1}',
             'w2_label': f'W{curr_week + 2}',
             'snap_date': snap_now,
@@ -2341,7 +2349,7 @@ def query_advance_utilization(team_id='gyeonggi'):
         wk       = row.get('wk')
         day_type = row.get('day_type')
         val      = row.get('util_rate')
-        if period in result and wk in ('w1', 'w2') and day_type in ('weekday', 'weekend') and val is not None:
+        if period in result and wk in ('w0', 'w1', 'w2') and day_type in ('weekday', 'weekend') and val is not None:
             try:
                 result[period][wk][day_type] = float(val)
             except (ValueError, TypeError):
@@ -5448,8 +5456,18 @@ def update_zone(team_id='gyeonggi'):
     timeline_data = query_reservation_timeline(team_id=team_id)
     print(f"       {len(timeline_data)} 존, {sum(len(v) for v in timeline_data.values()):,} 건")
 
+    print("  7 EV 충전소 조회...")
+    ev_chargers = query_ev_chargers(team_id=team_id)
+
+    print("  8 EV 가상존 조회...")
+    ev_virtual = query_ev_virtual_zones(team_id=team_id)
+
+    print("  9 EV 차량 존 조회...")
+    ev_car_zones = query_ev_car_zones(team_id=team_id)
+
     for name, data in [("zones", zones), ("profit", profit_data), ("parking_contract", parking_contract),
-                       ("gcar", gcar_data), ("closed", closed_data), ("socar_supply", socar_supply), ("timeline", timeline_data)]:
+                       ("gcar", gcar_data), ("closed", closed_data), ("socar_supply", socar_supply), ("timeline", timeline_data),
+                       ("ev_chargers", ev_chargers), ("ev_virtual_zones", ev_virtual), ("ev_car_zones", ev_car_zones)]:
         _save_cache(name, data, team_id=team_id)
 
     # 대시보드 주간 지표 생성 (dashboard.html 의존)
