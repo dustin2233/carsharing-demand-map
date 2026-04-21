@@ -3215,7 +3215,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
     <div class="sidebar-section">
         <div class="sidebar-section-title">EV</div>
         <button class="sidebar-btn" id="toggleEvZones"><span class="dot" style="background:#1565c0"></span>EV 운영 존</button>
-        <button class="sidebar-btn" id="toggleChargedOnly"><span class="dot" style="background:#0d47a1"></span>충전보장형만</button>
+        <button class="sidebar-btn" id="toggleChargedOnly"><span class="dot" style="background:#0d47a1"></span>충전보장형</button>
         <button class="sidebar-btn" id="toggleEvInfra"><span class="dot" style="background:#42a5f5"></span>충전 인프라</button>
     </div>
     <div class="sidebar-section">
@@ -4095,8 +4095,8 @@ document.getElementById('toggleClosed').addEventListener('click', function() {{
     showClosed ? closedLayer.addTo(map) : map.removeLayer(closedLayer);
     styleBtn(this, showClosed);
 }});
-// EV 필터: 1=EV운영존, 2=충전보장형만 (1과2 상호배제), 3=충전인프라 (독립)
-var evFilterMode = 0; // 0=off, 1=EV운영존, 2=충전보장형만
+// EV 필터: 1=EV운영존, 2=충전보장형 (1과2 상호배제), 3=충전인프라 (독립)
+var evFilterMode = 0; // 0=off, 1=EV운영존, 2=충전보장형
 var showEvInfra = false;
 
 function applyEvZoneFilter() {{
