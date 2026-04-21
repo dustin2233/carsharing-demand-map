@@ -72,24 +72,24 @@ body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-s
 .outer { display:flex; align-items:flex-start; gap:0; padding:0; min-height:calc(100vh - 136px); }
 
 /* ─── Main panel ─── */
-.main { flex:1; padding:14px 16px; min-width:0; overflow:hidden; }
+.main { flex:1; padding:14px 16px; min-width:0; overflow-x:clip; }
 
 /* ─── Chat sidebar ─── */
 .chat-sidebar {
   width:340px; flex-shrink:0;
   background:#fff; border-left:1px solid #e5e7eb;
-  position:sticky; top:136px;
+  position:fixed; top:52px; right:0;
+  height:calc(100vh - 52px);
+  display:flex; flex-direction:column;
+  z-index:200;
   transition:width .2s, opacity .2s;
+  box-shadow:-2px 0 12px rgba(0,0,0,.08);
 }
 .chat-sidebar.chat-hidden {
   width:0; overflow:hidden; opacity:0; pointer-events:none; border:none;
 }
-.chat-sidebar {
-  /* keep original props below */
-  height:calc(100vh - 136px);
-  display:flex; flex-direction:column;
-  z-index:50;
-}
+/* 사이드바 열릴 때 main 우측 여백 확보 */
+.outer:not(.sidebar-closed) > .main { padding-right:340px; }
 .chat-hdr { background:#0064FF; color:#fff; padding:12px 14px;
             display:flex; align-items:center; gap:10px; flex-shrink:0; }
 .chat-hdr-avatar { width:36px; height:36px; border-radius:50%; background:rgba(255,255,255,.15);
@@ -368,7 +368,7 @@ body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-s
   <!-- AI Chat sidebar -->
   <div class="chat-sidebar" id="chatSidebar">
     <div class="chat-hdr">
-      <div class="chat-hdr-avatar" style="font-size:22px;display:flex;align-items:center;justify-content:center">🧑</div>
+      <div class="chat-hdr-avatar" style="display:flex;align-items:center;justify-content:center"><img src="/sora_avatar.png" style="width:40px;height:40px;object-fit:cover;border-radius:50%"></div>
       <div style="flex:1">
         <div class="chat-hdr-title">소라</div>
         <div class="chat-status" id="chatStatus">로딩 중...</div>
@@ -649,7 +649,7 @@ const SUM_KEYS = ['revenue','profit','use_count','attempt',
   'payment_attempt'];
 const AVG_KEYS = ['rev_per_car','gpm','opr_weekday','opr_weekend','fail_rate',
   'discount_rate','round_rev_per_use','round_avg_hours',
-  'oneway_rev_per_use','oneway_avg_hours','d2d_rev_per_use','d2d_avg_hours','car_count'];
+  'oneway_rev_per_use','oneway_avg_hours','d2d_rev_per_use','d2d_avg_hours','car_count','zone_count'];
 
 function addWeekToMonth(m, w) {
   m._n++;
@@ -1745,14 +1745,20 @@ function toggleChat() {
   _chatOpen = !_chatOpen;
   const sidebar = document.getElementById('chatSidebar');
   const btn = document.getElementById('chatToggleBtn');
+  const outer = document.querySelector('.outer');
   sidebar.classList.toggle('chat-hidden', !_chatOpen);
+  if (outer) outer.classList.toggle('sidebar-closed', !_chatOpen);
   btn.classList.toggle('chat-open', _chatOpen);
   btn.querySelector('.toggle-label').textContent = _chatOpen ? '소라 닫기' : '소라 열기';
   btn.querySelector('.toggle-chevron').style.transform = _chatOpen ? 'rotate(180deg)' : '';
+  // 차트 캔버스 리사이즈
+  setTimeout(() => window.dispatchEvent(new Event('resize')), 220);
 }
 // 초기 상태: 닫힘
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('chatSidebar').classList.add('chat-hidden');
+  const outer = document.querySelector('.outer');
+  if (outer) outer.classList.add('sidebar-closed');
 });
 
 function switchUtil(chartIdx, mode, btn) {
@@ -1919,48 +1925,74 @@ const SYSTEM_PROMPT = `당신은 SOCAR(쏘카) 경기/강원 카셰어링 사업
 4. 복수의 지표가 연동된다면 그 관계(예: 가동률↑ → 대당매출↑)를 명시하세요.
 5. 데이터가 없거나 불확실한 경우엔 솔직히 말하고 확인이 필요한 지표를 제시하세요.
 6. 인사/일상 대화에는 자연스럽게 응답하되, 실적 관련 질문에는 위 원칙을 엄격히 적용하세요.
-7. 한국어로 답변하세요. 마크다운 볼드(**) 사용 가능. **각 섹션을 간결하게 유지하세요 — 핵심 시그널 3개, 액션 3개, 다음주 주목 지표 3개 이내로 제한합니다.**`;
+7. 한국어로 답변하세요. 마크다운 볼드(**) 사용 가능. **각 섹션을 간결하게 유지하세요 — 핵심 시그널 3개, 액션 3개, 다음주 주목 지표 3개 이내로 제한합니다.**
+
+[지역 계층 구조]
+데이터에서 사용하는 지역 단위는 다음과 같습니다:
+- region1: 도 단위 (경기도, 강원도)
+- region2: 시/군/구 단위 (수원시, 고양시, 춘천시 등)
+- region3: 읍/면/동 단위 (팔달구, 인계동, 소양면 등 — 가장 세부 단위)
+컨텍스트에 "[읍면동(region3)별 실적]" 데이터가 제공되며, 형식은 "시군구>읍면동" 입니다.`;
 
 function buildDataContext() {
-  const ds = getDatasets();
-  const _li = ds.futureFrom != null ? ds.futureFrom - 1 : ds.now.length - 1;
-  const W1 = ds.now[_li], W2 = ds.now[_li-1], Y1 = ds.yoy[_li];
-  if (!W1) return '';
+  if (!D?.weekly?.length) return '';
   const pct = (v, base) => { if (v==null||base==null||base===0) return '-'; const c=((v-base)/Math.abs(base)*100); return (c>0?'+':'')+c.toFixed(1)+'%'; };
-  const chgLbl = period === 'monthly' ? 'MoM' : 'WoW';
-  const periodLbl = period==='weekly' ? `W${W1.isoweek}주차` : period==='monthly' ? '최근월' : 'YTD';
+
+  // ── 전체 팀 W-1 / W-2 / YoY ── (현재 화면 필터 무관)
+  const nowRows = D.weekly.filter(r => r.period_type === 'now').sort((a,b) => a.isoyear!==b.isoyear ? a.isoyear-b.isoyear : a.isoweek-b.isoweek);
+  const yoyRows = D.weekly.filter(r => r.period_type === 'yoy').sort((a,b) => a.isoyear!==b.isoyear ? a.isoyear-b.isoyear : a.isoweek-b.isoweek);
+  const W1 = nowRows.at(-1), W2 = nowRows.at(-2), Y1 = yoyRows.at(-1);
+  if (!W1) return '';
+  const isoweek = W1.isoweek, isoyear = W1.isoyear;
+
   const lines = [
-    `[현재 데이터 컨텍스트] ${periodLbl} 기준${region?' / 지역: '+region:''}`,
-    `대당매출: ${fmt(W1.rev_per_car,'krw')}원 (${chgLbl} ${pct(W1.rev_per_car,W2?.rev_per_car)}, YoY ${pct(W1.rev_per_car,Y1?.rev_per_car)})`,
-    `GPM: ${fmt(W1.gpm,'pct')} (${chgLbl} ${pct(W1.gpm,W2?.gpm)}, YoY ${pct(W1.gpm,Y1?.gpm)})`,
-    `주중가동률: ${fmt(W1.opr_weekday,'pct')} / 주말가동률: ${fmt(W1.opr_weekend,'pct')}`,
-    `이용건수: ${fmt(W1.use_count,'cnt')}건 (${chgLbl} ${pct(W1.use_count,W2?.use_count)}, YoY ${pct(W1.use_count,Y1?.use_count)})`,
+    `[경기강원 전체 실적 컨텍스트] W${isoweek}(${isoyear}) 기준 — 현재 화면과 무관하게 팀 전체 데이터 제공`,
+    `대당매출: ${fmt(W1.rev_per_car,'krw')}원 (WoW ${pct(W1.rev_per_car,W2?.rev_per_car)}, YoY ${pct(W1.rev_per_car,Y1?.rev_per_car)})`,
+    `GPM: ${W1.gpm!=null?(W1.gpm*100).toFixed(1)+'%':'-'} (WoW ${pct(W1.gpm,W2?.gpm)}, YoY ${pct(W1.gpm,Y1?.gpm)})`,
+    `주중가동률: ${W1.opr_weekday!=null?(W1.opr_weekday*100).toFixed(1)+'%':'-'} / 주말가동률: ${W1.opr_weekend!=null?(W1.opr_weekend*100).toFixed(1)+'%':'-'}`,
+    `이용건수: ${fmt(W1.use_count,'cnt')}건 (WoW ${pct(W1.use_count,W2?.use_count)}, YoY ${pct(W1.use_count,Y1?.use_count)})`,
     `왕복 ${fmt(W1.round_count,'cnt')}건(${fmt(W1.round_rev_per_use,'krw')}원) / 편도 ${fmt(W1.oneway_count,'cnt')}건(${fmt(W1.oneway_rev_per_use,'krw')}원) / 부름 ${fmt(W1.d2d_count,'cnt')}건(${fmt(W1.d2d_rev_per_use,'krw')}원)`,
-    `수요접속: ${fmt(W1.attempt,'cnt')}건, 실패율: ${fmt(W1.fail_rate,'pct')}, 결제시도: ${fmt(W1.payment_attempt,'cnt')}건`,
+    `수요접속: ${fmt(W1.attempt,'cnt')}건, 실패율: ${W1.fail_rate!=null?(W1.fail_rate*100).toFixed(1)+'%':'-'}, 결제시도: ${fmt(W1.payment_attempt,'cnt')}건`,
     `운영대수: ${fmt(W1.car_count,'cnt')}대 / 총매출: ${fmt(W1.revenue,'krw')}원`,
   ];
 
-  // 경기도/강원도 region1별 분류 (weekly_region2 기반)
-  if (!region && D?.weekly_region2) {
-    const r2data = D.weekly_region2;
-    const isoweek = W1.isoweek, isoyear = W1.isoyear;
+  // ── 경기도/강원도 구분 ──
+  if (D?.weekly_region2?.length) {
     const r1Groups = {};
-    for (const row of r2data) {
+    for (const row of D.weekly_region2) {
       if (row.isoweek !== isoweek || row.isoyear !== isoyear || row.period_type !== 'now') continue;
       const r1 = row.region1 || '';
       const key = r1.includes('강원') ? '강원도' : r1.includes('경기') ? '경기도' : r1;
       if (!key) continue;
-      if (!r1Groups[key]) r1Groups[key] = { revenue:0, use_count:0, car_count:0, rev_total:0, car_total:0 };
-      r1Groups[key].revenue    += row.revenue    || 0;
-      r1Groups[key].use_count  += row.use_count  || 0;
-      r1Groups[key].rev_total  += row.revenue    || 0;
-      r1Groups[key].car_total  += row.car_count  || 0;
+      if (!r1Groups[key]) r1Groups[key] = { revenue:0, use_count:0, rev_total:0, car_total:0 };
+      r1Groups[key].revenue   += row.revenue   || 0;
+      r1Groups[key].use_count += row.use_count || 0;
+      r1Groups[key].rev_total += row.revenue   || 0;
+      r1Groups[key].car_total += row.car_count || 0;
     }
     const r1Lines = Object.entries(r1Groups).map(([name, g]) => {
       const rpc = g.car_total > 0 ? Math.round(g.rev_total / g.car_total) : 0;
-      return `  ${name}: 총매출 ${fmt(g.revenue,'krw')}원, 이용건수 ${fmt(g.use_count,'cnt')}건, 대당매출 ${fmt(rpc,'krw')}원`;
+      return `  ${name}: 대당매출 ${fmt(rpc,'krw')}원, 이용건수 ${fmt(g.use_count,'cnt')}건, 총매출 ${fmt(g.revenue,'krw')}원`;
     });
     if (r1Lines.length) lines.push(`[경기/강원 구분]\n${r1Lines.join('\n')}`);
+  }
+
+  // ── 시군구(region3)별 전체 실적 ──
+  if (D?.weekly_region3?.length) {
+    const nowMap = {}, yoyMap = {};
+    for (const row of D.weekly_region3) {
+      if (row.isoweek !== isoweek || row.isoyear !== isoyear) continue;
+      const key = `${row.region2_parent||''}>${row.region||''}`;
+      if (row.period_type === 'now') nowMap[key] = row;
+      else if (row.period_type === 'yoy') yoyMap[key] = row;
+    }
+    const r3Lines = Object.entries(nowMap).map(([key, r]) => {
+      const y = yoyMap[key];
+      const rpc = r.rev_per_car ? Math.round(r.rev_per_car) : 0;
+      const yoyStr = y?.rev_per_car ? ` YoY${pct(rpc, Math.round(y.rev_per_car))}` : '';
+      return `  ${key}: 대당매출 ${fmt(rpc,'krw')}원${yoyStr}, 주중가동 ${r.opr_weekday!=null?(r.opr_weekday*100).toFixed(1)+'%':'-'}, 주말가동 ${r.opr_weekend!=null?(r.opr_weekend*100).toFixed(1)+'%':'-'}, 이용건수 ${fmt(r.use_count,'cnt')}건, 운영대수 ${fmt(r.car_count,'cnt')}대`;
+    });
+    if (r3Lines.length) lines.push(`[읍면동(region3)별 실적 — 시군구>읍면동 형식]\n${r3Lines.join('\n')}`);
   }
 
   return lines.join('\n');

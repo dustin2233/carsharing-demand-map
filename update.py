@@ -1225,7 +1225,8 @@ def match_ev_to_zones(ev_data, zones_data, radius_km=0.1):
             z['ev_detail'].append({
                 'name': ename, 'fast': e['fast'], 'slow': e['slow'], 'total': e['total'],
                 'dist': round(haversine_km(zlat, zlng, e['lat'], e['lng']) * 1000),
-                'same': is_same
+                'same': is_same,
+                'congestion': e.get('congestion')
             })
         z['ev_detail'].sort(key=lambda x: (not x['same'], x['dist']))
         # 충전보장 EV 존인데 이름 매칭된 현장 충전기가 없으면, 가장 가까운 충전소를 현장으로 간주
@@ -1235,6 +1236,49 @@ def match_ev_to_zones(ev_data, zones_data, radius_km=0.1):
         z['ev_same_total'] = sum(e['total'] for e in z['ev_detail'] if e['same'])
         z['ev_same_fast'] = sum(e['fast'] for e in z['ev_detail'] if e['same'])
         z['ev_same_slow'] = sum(e['slow'] for e in z['ev_detail'] if e['same'])
+
+
+def compute_ev_congestion():
+    """충전소별 시간대별 혼잡도 집계 (수집 로그 기반)"""
+    from collections import defaultdict
+    log_dir = os.path.join(OUTPUT_DIR, '.cache', 'ev_status_log')
+    if not os.path.exists(log_dir):
+        return {}
+
+    # 충전소별 시간대별 충전중/전체 집계
+    station_hourly = defaultdict(lambda: defaultdict(lambda: {'charging': 0, 'total': 0}))
+    file_count = 0
+    for fname in sorted(os.listdir(log_dir)):
+        if not fname.endswith('.jsonl'):
+            continue
+        for line in open(os.path.join(log_dir, fname)):
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            hour = d['hour']
+            for sid, s in d.get('stations', {}).items():
+                station_hourly[sid][hour]['charging'] += s['charging']
+                station_hourly[sid][hour]['total'] += s['total']
+        file_count += 1
+
+    if file_count == 0:
+        return {}
+
+    # 충전소별 24시간 혼잡도 배열 (0~23시, 비율 0~100)
+    result = {}
+    for sid, hours in station_hourly.items():
+        hourly = []
+        for h in range(24):
+            if h in hours and hours[h]['total'] > 0:
+                rate = round(hours[h]['charging'] / hours[h]['total'] * 100)
+            else:
+                rate = -1  # 데이터 없음
+            hourly.append(rate)
+        result[sid] = hourly
+
+    print(f"  충전 혼잡도: {len(result)}개 충전소, {file_count}일 데이터")
+    return result
 
 
 def query_ev_car_zones(team_id='gyeonggi'):
@@ -2776,6 +2820,30 @@ ZONE_JS = """
         if (imaginary === 5) return '부름우선';
         return '일반';
     }
+    function evCongestionChart(congestion) {
+        if (!congestion) return '';
+        var hasData = congestion.some(function(v) { return v >= 0; });
+        if (!hasData) return '';
+        var html = '<div style="margin-top:8px;">' +
+            '<div style="font-size:9px;color:#8b95a5;font-weight:600;margin-bottom:4px;">충전 혼잡도 <span style="font-weight:400;">(수집 중)</span></div>' +
+            '<div style="display:flex;align-items:flex-end;gap:1px;height:28px;">';
+        congestion.forEach(function(v) {
+            var h = v < 0 ? 2 : Math.max(2, v * 0.28);
+            var color = v < 0 ? '#e8eaed' : v < 30 ? '#c8e6c9' : v < 60 ? '#81c784' : '#ef5350';
+            html += '<div style="flex:1;height:' + h + 'px;background:' + color + ';border-radius:1px 1px 0 0;"></div>';
+        });
+        html += '</div><div style="display:flex;justify-content:space-between;margin-top:1px;">' +
+            '<span style="font-size:8px;color:#aab0c4;">0</span><span style="font-size:8px;color:#aab0c4;">6</span>' +
+            '<span style="font-size:8px;color:#aab0c4;">12</span><span style="font-size:8px;color:#aab0c4;">18</span>' +
+            '<span style="font-size:8px;color:#aab0c4;">24</span></div>' +
+            '<div style="display:flex;gap:6px;margin-top:2px;">' +
+            '<span style="font-size:8px;color:#8b95a5;"><span style="display:inline-block;width:6px;height:6px;background:#c8e6c9;border-radius:1px;vertical-align:middle;margin-right:2px;"></span>여유</span>' +
+            '<span style="font-size:8px;color:#8b95a5;"><span style="display:inline-block;width:6px;height:6px;background:#81c784;border-radius:1px;vertical-align:middle;margin-right:2px;"></span>보통</span>' +
+            '<span style="font-size:8px;color:#8b95a5;"><span style="display:inline-block;width:6px;height:6px;background:#ef5350;border-radius:1px;vertical-align:middle;margin-right:2px;"></span>혼잡</span>' +
+            '</div></div>';
+        return html;
+    }
+
     function makeZoneIcon(z) {
         var color = zoneColor(z.imaginary);
         var size = Math.max(22, Math.min(38, 18 + z.car_count * 2));
@@ -2865,6 +2933,7 @@ ZONE_JS = """
                     same.forEach(function(e) {
                         var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
                         h += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:10px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:9px">(' + label + ')</span></span></div>';
+                        if (e.congestion) h += evCongestionChart(e.congestion);
                     });
                 } else {
                     h += '<div style="font-size:10px;color:#bbb;font-weight:600;">⚡ 현장 충전기 없음</div>';
@@ -2896,6 +2965,7 @@ ZONE_JS = """
                     same.forEach(function(e) {
                         var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
                         html += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:11px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:10px">(' + label + ')</span></span></div>';
+                        if (e.congestion) html += evCongestionChart(e.congestion);
                     });
                 } else {
                     html += '<div style="font-size:10px;color:#bbb;font-weight:600;margin-bottom:4px;">⚡ 현장 충전기 없음</div>';
@@ -3823,6 +3893,7 @@ evData.forEach(function(e) {{
         '<div class="popup-row"><span class="popup-label">운영기관</span><span>' + e.busiNm + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">충전기</span><span><b style="color:#1565c0">' + e.total + '기</b> (' + label + ')</span></div>' +
         '<div class="popup-row"><span class="popup-label">이용시간</span><span>' + (e.useTime || '정보없음') + '</span></div>' +
+        (e.congestion ? evCongestionChart(e.congestion) : '') +
         '<div style="margin-top:6px;padding:4px 8px;background:#e3f2fd;border-radius:6px;font-size:10px;color:#0d47a1;font-weight:600;">쏘카 미운영 · EV존 개설 후보</div>'
     ).addTo(evLayer);
 }});
@@ -5018,6 +5089,12 @@ def regenerate_from_cache(team_id='gyeonggi'):
         z['ev_charged_count'] = ec.get('ev_charged_count', 0)
         z['has_ev'] = z['ev_car_count'] > 0 or z.get('ev_zone') is not None
         z['has_charged_ev'] = z.get('ev_zone') is not None or '전기차' in z.get('zone_name', '')
+
+    # 충전 혼잡도 집계
+    ev_congestion = compute_ev_congestion()
+    # ev_data에 혼잡도 추가
+    for e in ev_data:
+        e['congestion'] = ev_congestion.get(e['statId'], None)
 
     # 존에 충전소 매칭 (ev_zone 설정 후 실행 — 충전보장존 판별에 사용)
     match_ev_to_zones(ev_data, zones)
