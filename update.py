@@ -2251,6 +2251,104 @@ def compute_reentry_zones(closed_data, access_data, reservation_data, zones_data
     return results[:50]
 
 
+def query_advance_utilization(team_id='gyeonggi'):
+    """사전가동률 조회 — 현재 주 스냅샷 기준 W+1, W+2 가동률 (now/yoy)
+    스냅샷 테이블: socar_biz_base.operation_per_car_daily_v2_snapshot
+    tight date filter 필수 (bytes billed 제한)
+    """
+    from datetime import date as ddate
+    today = ddate.today()
+    iso = today.isocalendar()
+    curr_year, curr_week = iso.year, iso.week
+
+    this_monday = ddate.fromisocalendar(curr_year, curr_week, 1)
+
+    # 현재 W+1, W+2 날짜 범위
+    w1_start = this_monday + timedelta(weeks=1)
+    w1_end   = this_monday + timedelta(weeks=2, days=-1)
+    w2_start = this_monday + timedelta(weeks=2)
+    w2_end   = this_monday + timedelta(weeks=3, days=-1)
+
+    snap_now      = str(this_monday)
+    snap_now_next = str(this_monday + timedelta(days=1))
+
+    # YoY: 작년 동기 주차 월요일
+    ly_year = curr_year - 1
+    max_week_ly = ddate(ly_year, 12, 28).isocalendar().week
+    ly_week = min(curr_week, max_week_ly)
+    ly_monday = ddate.fromisocalendar(ly_year, ly_week, 1)
+
+    ly_w1_start = ly_monday + timedelta(weeks=1)
+    ly_w1_end   = ly_monday + timedelta(weeks=2, days=-1)
+    ly_w2_start = ly_monday + timedelta(weeks=2)
+    ly_w2_end   = ly_monday + timedelta(weeks=3, days=-1)
+
+    snap_yoy      = str(ly_monday)
+    snap_yoy_next = str(ly_monday + timedelta(days=1))
+
+    # socar_zone.zone 컬럼은 region_1 (언더스코어)
+    regions = _expand_regions(TEAM_CONFIG[team_id]['regions'])
+    r1_quoted = ', '.join(f"'{r}'" for r in regions)
+
+    sql = f"""
+    WITH base AS (
+      SELECT 'now' AS period,
+        CASE WHEN s.date BETWEEN '{w1_start}' AND '{w1_end}' THEN 'w1'
+             WHEN s.date BETWEEN '{w2_start}' AND '{w2_end}' THEN 'w2'
+        END AS wk,
+        CASE WHEN EXTRACT(DAYOFWEEK FROM s.date) IN (1,7) THEN 'weekend' ELSE 'weekday' END AS day_type,
+        s.op_min, s.dp_min
+      FROM `socar-data.socar_biz_base.operation_per_car_daily_v2_snapshot` s
+      JOIN `socar-data.socar_zone.zone` z ON z.id = s.zone_id
+      WHERE s.snapshot_at >= '{snap_now}' AND s.snapshot_at < '{snap_now_next}'
+        AND s.date BETWEEN '{w1_start}' AND '{w2_end}'
+        AND z.region_1 IN ({r1_quoted})
+      UNION ALL
+      SELECT 'yoy' AS period,
+        CASE WHEN s.date BETWEEN '{ly_w1_start}' AND '{ly_w1_end}' THEN 'w1'
+             WHEN s.date BETWEEN '{ly_w2_start}' AND '{ly_w2_end}' THEN 'w2'
+        END AS wk,
+        CASE WHEN EXTRACT(DAYOFWEEK FROM s.date) IN (1,7) THEN 'weekend' ELSE 'weekday' END AS day_type,
+        s.op_min, s.dp_min
+      FROM `socar-data.socar_biz_base.operation_per_car_daily_v2_snapshot` s
+      JOIN `socar-data.socar_zone.zone` z ON z.id = s.zone_id
+      WHERE s.snapshot_at >= '{snap_yoy}' AND s.snapshot_at < '{snap_yoy_next}'
+        AND s.date BETWEEN '{ly_w1_start}' AND '{ly_w2_end}'
+        AND z.region_1 IN ({r1_quoted})
+    )
+    SELECT period, wk, day_type, SAFE_DIVIDE(SUM(op_min), SUM(dp_min)) AS util_rate
+    FROM base
+    WHERE wk IS NOT NULL
+    GROUP BY period, wk, day_type
+    ORDER BY period, wk, day_type
+    """
+
+    rows = run_bq(sql, max_rows=20)
+    result = {
+        'now': {'w1': {'weekday': None, 'weekend': None}, 'w2': {'weekday': None, 'weekend': None}},
+        'yoy': {'w1': {'weekday': None, 'weekend': None}, 'w2': {'weekday': None, 'weekend': None}},
+        'meta': {
+            'curr_week': curr_week,
+            'curr_year': curr_year,
+            'w1_label': f'W{curr_week + 1}',
+            'w2_label': f'W{curr_week + 2}',
+            'snap_date': snap_now,
+            'ly_snap_date': snap_yoy,
+        }
+    }
+    for row in rows:
+        period   = row.get('period')
+        wk       = row.get('wk')
+        day_type = row.get('day_type')
+        val      = row.get('util_rate')
+        if period in result and wk in ('w1', 'w2') and day_type in ('weekday', 'weekend') and val is not None:
+            try:
+                result[period][wk][day_type] = float(val)
+            except (ValueError, TypeError):
+                pass
+    return result
+
+
 def query_weekly_trends(team_id='gyeonggi'):
     """region2별 주간 접속/예약/공급 추이 (최근 12주)"""
     bb = _team_bbox(team_id)
@@ -2898,93 +2996,56 @@ ZONE_JS = """
         }
         left += '</div>';
 
-        // ── 오른쪽: EV 가상존 (있을 때만) ──
+        // ── 충전기 정보 (공통 함수) ──
+        function buildChargerHtml(evDetail) {
+            if (!evDetail || evDetail.length === 0) return '<div style="font-size:10px;color:#bbb;font-weight:600;">⚡ 100m 내 충전기 없음</div>';
+            var html = '';
+            evDetail.forEach(function(e, i) {
+                var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
+                var title = i === 0 ? '⚡ 최인근 충전기' : '';
+                if (title) html += '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">' + title + '</div>';
+                html += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:10px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:9px">(' + label + ')</span></span></div>';
+                if (i === 0 && e.congestion) html += evCongestionChart(e.congestion);
+                if (i === 0 && evDetail.length > 1) html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-top:6px;margin-bottom:2px;">기타 충전소</div>';
+            });
+            return html;
+        }
+
+        // ── 오른쪽 칼럼 ──
+        var hasCharger = z.ev_detail && z.ev_detail.length > 0;
+        var hasRightCol = hasEv || hasCharger;
+        var w = hasRightCol ? 'min-width:520px;' : '';
+
         var right = '';
-        if (hasEv) {
-            var ev = z.ev_zone;
-            var evD2d = ev.is_d2d ? '부름 가능' : '부름 불가';
-            var evD2dColor = ev.is_d2d ? '#27ae60' : '#e74c3c';
-            right = '<div style="flex:1;min-width:240px;border-left:2px solid #1565c0;padding-left:14px;">' +
-                '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><span style="background:#1565c0;color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;">충전보장 EV</span></div>' +
-                '<div class="popup-title" style="font-size:13px;">' + ev.zone_name + '</div>' +
-                '<div class="popup-row"><span class="popup-label">존 ID</span><span style="font-family:monospace;color:#aab0c4">' + ev.zone_id + '</span></div>' +
-                '<div class="popup-row"><span class="popup-label">차량</span><span><b>' + ev.car_count + '</b>대</span></div>' +
-                '<div class="popup-row"><span class="popup-label">유형</span><span class="popup-badge" style="background:' + zoneColor(ev.imaginary) + '">' + zoneLabel(ev.imaginary) + '</span></div>' +
-                '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + evD2dColor + ';font-weight:600">' + evD2d + '</span></div>';
-            if (ev.total_revenue > 0) {
-                right += '<div class="popup-section"><div class="popup-section-title" style="color:#1565c0;">실적 <span style="font-weight:400;font-size:10px;color:#8890a4;margin-left:4px;">최근 4주</span></div>' +
-                    '<div class="popup-row"><span class="popup-label">존 매출(4주)</span><b>' + fmtNum(ev.total_revenue) + '원</b></div>' +
-                    '<div class="popup-row"><span class="popup-label">대당 매출</span><b>' + fmtNum(ev.revenue_per_car_28d) + '원</b></div>' +
-                    '<div class="popup-row"><span class="popup-label">대당 GP</span><b>' + fmtNum(ev.gp_per_car_28d) + '원</b></div>' +
-                    '<div class="popup-row"><span class="popup-label">가동률</span><b>' + (ev.utilization_rate || 0).toFixed(1) + '%</b></div>' +
-                    '</div>';
+        if (hasRightCol) {
+            right = '<div style="flex:1;min-width:220px;border-left:2px solid ' + (hasEv ? '#1565c0' : '#43a047') + ';padding-left:14px;">';
+            if (hasEv) {
+                var ev = z.ev_zone;
+                var evD2d = ev.is_d2d ? '부름 가능' : '부름 불가';
+                var evD2dColor = ev.is_d2d ? '#27ae60' : '#e74c3c';
+                right += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><span style="background:#1565c0;color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;">충전보장 EV</span></div>' +
+                    '<div class="popup-title" style="font-size:13px;">' + ev.zone_name + '</div>' +
+                    '<div class="popup-row"><span class="popup-label">존 ID</span><span style="font-family:monospace;color:#aab0c4">' + ev.zone_id + '</span></div>' +
+                    '<div class="popup-row"><span class="popup-label">차량</span><span><b>' + ev.car_count + '</b>대</span></div>' +
+                    '<div class="popup-row"><span class="popup-label">유형</span><span class="popup-badge" style="background:' + zoneColor(ev.imaginary) + '">' + zoneLabel(ev.imaginary) + '</span></div>' +
+                    '<div class="popup-row"><span class="popup-label">부름</span><span style="color:' + evD2dColor + ';font-weight:600">' + evD2d + '</span></div>';
+                if (ev.total_revenue > 0) {
+                    right += '<div class="popup-section"><div class="popup-section-title" style="color:#1565c0;">실적 <span style="font-weight:400;font-size:10px;color:#8890a4;margin-left:4px;">최근 4주</span></div>' +
+                        '<div class="popup-row"><span class="popup-label">존 매출(4주)</span><b>' + fmtNum(ev.total_revenue) + '원</b></div>' +
+                        '<div class="popup-row"><span class="popup-label">대당 매출</span><b>' + fmtNum(ev.revenue_per_car_28d) + '원</b></div>' +
+                        '<div class="popup-row"><span class="popup-label">대당 GP</span><b>' + fmtNum(ev.gp_per_car_28d) + '원</b></div>' +
+                        '<div class="popup-row"><span class="popup-label">가동률</span><b>' + (ev.utilization_rate || 0).toFixed(1) + '%</b></div>' +
+                        '</div>';
+                }
+                right += '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>';
             }
-            // 충전기 정보를 EV 칼럼 하단에 포함
-            right += (function() {
-                if (!z.ev_detail || z.ev_detail.length === 0) return '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div><div style="font-size:10px;color:#bbb;font-weight:600;">⚡ 현장 충전기 없음</div>';
-                var same = z.ev_detail.filter(function(e) { return e.same; });
-                var nearby = z.ev_detail.filter(function(e) { return !e.same; });
-                var h = '<div style="border-top:1px solid #f0f1f3;margin:6px 0;"></div>';
-                if (same.length > 0) {
-                    var sTotal = same.reduce(function(s,e) { return s+e.total; }, 0);
-                    var sFast = same.reduce(function(s,e) { return s+e.fast; }, 0);
-                    var sSlow = same.reduce(function(s,e) { return s+e.slow; }, 0);
-                    h += '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 현장 충전기 ' + sTotal + '기 (급속 ' + sFast + ' / 완속 ' + sSlow + ')</div>';
-                    same.forEach(function(e) {
-                        var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
-                        h += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:10px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:9px">(' + label + ')</span></span></div>';
-                        if (e.congestion) h += evCongestionChart(e.congestion);
-                    });
-                } else {
-                    h += '<div style="font-size:10px;color:#bbb;font-weight:600;">⚡ 현장 충전기 없음</div>';
-                }
-                if (nearby.length > 0) {
-                    h += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-top:4px;margin-bottom:2px;">인근 충전소</div>';
-                    nearby.forEach(function(e) {
-                        h += '<div class="popup-row"><span class="popup-label" style="font-size:9px">' + e.dist + 'm</span><span style="font-size:9px;color:#8b95a5">' + e.name + ' ' + e.total + '기</span></div>';
-                    });
-                }
-                return h;
-            })();
+            right += buildChargerHtml(z.ev_detail);
             right += '</div>';
         }
 
-        // ── 충전기 정보 (EV 존 없을 때만 하단에 표시) ──
-        var chargerBottom = '';
-        if (!hasEv) {
-            chargerBottom = (function() {
-                if (!z.ev_detail || z.ev_detail.length === 0) return '<div class="popup-row"><span class="popup-label">⚡ 충전기</span><span style="color:#bbb">100m 내 없음</span></div>';
-                var same = z.ev_detail.filter(function(e) { return e.same; });
-                var nearby = z.ev_detail.filter(function(e) { return !e.same; });
-                var html = '';
-                if (same.length > 0) {
-                    var sTotal = same.reduce(function(s,e) { return s+e.total; }, 0);
-                    var sFast = same.reduce(function(s,e) { return s+e.fast; }, 0);
-                    var sSlow = same.reduce(function(s,e) { return s+e.slow; }, 0);
-                    html += '<div style="font-size:10px;color:#43a047;font-weight:700;margin-bottom:4px;">⚡ 현장 충전기 ' + sTotal + '기 (급속 ' + sFast + ' / 완속 ' + sSlow + ')</div>';
-                    same.forEach(function(e) {
-                        var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
-                        html += '<div class="popup-row"><span class="popup-label" style="font-size:10px;color:#43a047">' + e.dist + 'm</span><span style="font-size:11px">' + e.name + ' <b>' + e.total + '기</b> <span style="color:#8b95a5;font-size:10px">(' + label + ')</span></span></div>';
-                        if (e.congestion) html += evCongestionChart(e.congestion);
-                    });
-                } else {
-                    html += '<div style="font-size:10px;color:#bbb;font-weight:600;margin-bottom:4px;">⚡ 현장 충전기 없음</div>';
-                }
-                if (nearby.length > 0) {
-                    html += '<div style="font-size:10px;color:#8b95a5;font-weight:600;margin-top:6px;margin-bottom:2px;">인근 충전소</div>';
-                    nearby.forEach(function(e) {
-                        html += '<div class="popup-row"><span class="popup-label" style="font-size:10px">' + e.dist + 'm</span><span style="font-size:10px;color:#8b95a5">' + e.name + ' ' + e.total + '기</span></div>';
-                    });
-                }
-                return html;
-            })();
-        }
+        var bottom = '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
 
-        var bottom = '<div style="border-top:1px solid #f0f1f3;margin:8px 0 6px;"></div>' +
-            chargerBottom +
-            '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
-
-        if (hasEv) {
+        if (hasRightCol) {
             return '<div style="' + w + '"><div style="display:flex;gap:14px;">' + left + right + '</div>' + bottom + '</div>';
         }
         return left + bottom;
@@ -3736,7 +3797,8 @@ zonesData.forEach(function(z) {{
 zonesData.forEach(function(z) {{
     // 가상존(전기차)은 원본존에 귀속 → 별도 마커 미표시
     if (evVirtualZoneIds[z.zone_id]) return;
-    var popupOpts = z.ev_zone ? {{ maxWidth: 560 }} : {{ maxWidth: 300 }};
+    var hasRightCol = z.ev_zone || (z.ev_detail && z.ev_detail.length > 0);
+    var popupOpts = hasRightCol ? {{ maxWidth: 560 }} : {{ maxWidth: 300 }};
     var evZoneId = z.ev_zone ? z.ev_zone.zone_id : null;
     var evZoneName = z.ev_zone ? z.ev_zone.zone_name : null;
     var m = L.marker([z.lat, z.lng], {{ icon: makeZoneIcon(z) }}).bindPopup(makePopup(z), popupOpts).on('click', (function(zid, zname, eid, ename) {{ return function() {{ showTimeline(zid, zname, eid, ename); }}; }})(z.zone_id, z.zone_name, evZoneId, evZoneName));
@@ -5238,7 +5300,8 @@ def main(team_id='gyeonggi'):
                        ("socar_supply", socar_supply), ("timeline", timeline_data),
                        ("dashboard_metrics", dashboard_metrics),
                        ("dashboard_region2", dashboard_region2),
-                       ("dashboard_region3", dashboard_region3)]:
+                       ("dashboard_region3", dashboard_region3),
+                       ("advance_util", query_advance_utilization(team_id=team_id))]:
         _save_cache(name, data, team_id=team_id)
 
     print("  HTML 생성...")
@@ -5404,6 +5467,15 @@ def update_zone(team_id='gyeonggi'):
     dashboard_region3 = query_dashboard_by_region(team_id=team_id, region_level='region3')
     print(f"       {len(dashboard_region3.get('weekly', []))} rows")
     _save_cache("dashboard_region3", dashboard_region3, team_id=team_id)
+
+    print("  +4 사전가동률 조회 (W+1, W+2)...")
+    try:
+        advance_util = query_advance_utilization(team_id=team_id)
+        _save_cache("advance_util", advance_util, team_id=team_id)
+        now = advance_util.get('now', {})
+        print(f"       W+1={now.get('w1'):.1%} W+2={now.get('w2'):.1%}" if now.get('w1') else "       데이터 없음")
+    except Exception as e:
+        print(f"  [경고] 사전가동률 조회 실패: {e}")
 
     _build_html(team_id=team_id)
     print("[완료] 존/실적 업데이트 완료")

@@ -256,6 +256,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         dashboard_metrics = load('dashboard_metrics') or {}
         dashboard_region2 = load('dashboard_region2') or {}
         dashboard_region3 = load('dashboard_region3') or {}
+        advance_util = load('advance_util') or {}
 
         # 존+실적 병합
         profit_int = {int(k): v for k, v in profit.items()}
@@ -294,6 +295,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             'weekly': dashboard_metrics.get('weekly', []),
             'weekly_region2': dashboard_region2.get('weekly', []),
             'weekly_region3': dashboard_region3.get('weekly', []),
+            'advance_util': advance_util,
             'generated_at': dashboard_metrics.get('generated_at') or get_last_update(LAST_UPDATE_ZONE),
         })
 

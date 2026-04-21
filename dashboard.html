@@ -352,7 +352,7 @@ body { font-family: -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-s
 
 <!-- Metric tabs -->
 <div class="mtabs" id="metricTabs">
-  <button class="mtab active" onclick="setMetric('revenue',this)">💰 통합 매출</button>
+  <button class="mtab active" onclick="setMetric('revenue',this)">💰 매출/가동</button>
   <button class="mtab" onclick="setMetric('waytype',this)">🔀 Way Type</button>
   <button class="mtab" onclick="setMetric('demand',this)">📊 수요</button>
   <button class="mtab" onclick="setMetric('cost',this)">💸 비용</button>
@@ -423,7 +423,7 @@ let _rtLastMetric = null;
 ═══════════════════════════════════════════ */
 const METRICS = {
   revenue: {
-    label: '통합 매출',
+    label: '매출/가동',
     kpis: [
       { key:'rev_per_car',  label:'주당 대당매출', fmt:'krw', unit:'원', ac:'#0064FF' },
       { key:'revenue',      label:'주간 총매출',   fmt:'krw', unit:'원', ac:'#6366f1' },
@@ -763,6 +763,8 @@ function render() {
     </div>`;
   }).join('');
 
+  const advKpiCards = '';
+
   // Custom waytype renderer
   if (metric === 'waytype') {
     const regionBreakdownHtml = (regionLevel === 0 || regionLevel === 1)
@@ -772,6 +774,7 @@ function render() {
       <div class="kpi-row">${kpisHtml}</div>
       ${renderWaytype(ds)}
       ${regionBreakdownHtml}`;
+    // (waytype 탭은 사전가동률 불필요)
     renderWaytypeCharts(ds);
     return;
   }
@@ -805,7 +808,7 @@ function render() {
 
   document.getElementById('mainContent').innerHTML = `
     <div class="view-note">${note}</div>
-    <div class="kpi-row">${kpisHtml}</div>
+    <div class="kpi-row">${kpisHtml}${advKpiCards}</div>
     <div class="metric-section">
       <div class="chart-grid ${chartCols}">${chartsHtml}</div>
     </div>
@@ -1179,6 +1182,69 @@ function drawChart(id, cfg, ds) {
     };
   }
 
+  // 사전가동률 연장 (utilToggle 차트, weekly/ytd 모드)
+  let chartLabels = [...ds.labels];
+  if (cfg.utilToggle && period !== 'monthly' && D?.advance_util?.meta) {
+    const au = D.advance_util;
+    const meta = au.meta || {};
+    const dayKey = cfg.keys[0] === 'opr_weekday' ? 'weekday' : 'weekend';
+    const nPts = ds.now.length;
+    const toDisp = v => v != null ? parseFloat((v * 100).toFixed(3)) : null;
+
+    const advNowW1 = toDisp(au.now?.w1?.[dayKey]);
+    const advNowW2 = toDisp(au.now?.w2?.[dayKey]);
+    const advYoyW1 = toDisp(au.yoy?.w1?.[dayKey]);
+    const advYoyW2 = toDisp(au.yoy?.w2?.[dayKey]);
+
+    if (advNowW1 != null || advNowW2 != null) {
+      chartLabels = [...ds.labels, `${meta.w1_label || 'W+1'} *`, `${meta.w2_label || 'W+2'} *`];
+
+      // 기존 datasets 확장 (null 패딩)
+      datasets.forEach(d => { d.data = [...d.data, null, null]; });
+
+      // 마지막 실적 → W+1 → W+2 연결선 (현재연도 색, 점선)
+      const lastNow = datasets[0]?.data[nPts - 1] ?? null;
+      datasets.push({
+        label: `사전가동 (스냅샷)`,
+        data: [...Array(nPts - 1).fill(null), lastNow, advNowW1, advNowW2],
+        borderColor: cfg.colors[0],
+        borderDash: [5, 4],
+        backgroundColor: 'transparent',
+        fill: false,
+        tension: .2,
+        pointRadius: [0, ...Array(nPts - 1).fill(0), 0, 4, 4].slice(-(nPts + 2)),
+        pointStyle: 'circle',
+        borderWidth: 2,
+        yAxisID: 'y',
+        datalabels: {
+          display: ctx => ctx.dataIndex >= nPts,
+          anchor: 'top', align: 'top',
+          font: { size: 8, weight: 'bold' }, color: cfg.colors[0],
+          formatter: v => v == null ? '' : fmtAxis(v, cfg.fmt),
+          offset: 2,
+        },
+      });
+
+      // YoY 사전 (점선, 회색)
+      if (advYoyW1 != null || advYoyW2 != null) {
+        const lastYoy = datasets[1]?.data[nPts - 1] ?? null;
+        datasets.push({
+          label: `사전가동 YoY`,
+          data: [...Array(nPts - 1).fill(null), lastYoy, advYoyW1, advYoyW2],
+          borderColor: '#94a3b8',
+          borderDash: [4, 3],
+          backgroundColor: 'transparent',
+          fill: false,
+          tension: .2,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          yAxisID: 'y',
+          datalabels: { display: false },
+        });
+      }
+    }
+  }
+
   // YTD 미래 참고 구간 음영 플러그인
   const futureFrom = isYtd && ds.futureFrom != null ? ds.futureFrom : null;
   const ytdShadePlugin = futureFrom != null ? [{
@@ -1211,7 +1277,7 @@ function drawChart(id, cfg, ds) {
 
   const instance = new Chart(ctx, {
     type: 'line',
-    data: { labels: ds.labels, datasets },
+    data: { labels: chartLabels, datasets },
     plugins: ytdShadePlugin,
     options: {
       responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
@@ -1978,6 +2044,23 @@ function buildDataContext() {
   }
 
   // ── 시군구(region3)별 전체 실적 ──
+  // ── 사전가동률 (W+1, W+2) ──
+  if (D?.advance_util?.meta) {
+    const au = D.advance_util;
+    const meta = au.meta;
+    const fmtPct = v => v != null ? (v * 100).toFixed(1) + '%' : '-';
+    const fmtPp  = (now_v, yoy_v) => {
+      if (now_v == null || yoy_v == null) return '';
+      const d = (now_v - yoy_v) * 100;
+      return ` YoY${d > 0 ? '+' : ''}${d.toFixed(1)}%p`;
+    };
+    lines.push(
+      `[사전가동률 — ${meta.snap_date} 스냅샷 기준]\n` +
+      `  ${meta.w1_label} 가동률: ${fmtPct(au.now?.w1)}${fmtPp(au.now?.w1, au.yoy?.w1)}\n` +
+      `  ${meta.w2_label} 가동률: ${fmtPct(au.now?.w2)}${fmtPp(au.now?.w2, au.yoy?.w2)}`
+    );
+  }
+
   if (D?.weekly_region3?.length) {
     const nowMap = {}, yoyMap = {};
     for (const row of D.weekly_region3) {
