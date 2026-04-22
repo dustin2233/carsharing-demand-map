@@ -863,7 +863,9 @@ function buildTable(cfg, ds, chartIdx) {
     const meta = au.meta || {};
     const dayKey = key0 === 'opr_weekday' ? 'weekday' : 'weekend';
     const fmtAdv = v => v != null ? (v * 100).toFixed(1) + '%' : '-';
-    const lastNowVal = nowData.at(-1)?.[key0] ?? null;
+
+    const auSrc = (au.by_region2 && region && au.by_region2[region])
+      ? au.by_region2[region] : au;
 
     const tdPp = (nv, yv) => {
       if (nv == null || yv == null) return `<td class="td-chg">-</td>`;
@@ -872,9 +874,9 @@ function buildTable(cfg, ds, chartIdx) {
       return `<td class="td-chg ${cls}">${pp > 0 ? '+' : ''}${pp.toFixed(1)}%p</td>`;
     };
     [
-      { lbl: `${meta.w0_label || 'W'} *`, now: au.now?.w0?.[dayKey], yoy: au.yoy?.w0?.[dayKey] },
-      { lbl: `${meta.w1_label || 'W+1'} *`, now: au.now?.w1?.[dayKey], yoy: au.yoy?.w1?.[dayKey] },
-      { lbl: `${meta.w2_label || 'W+2'} *`, now: au.now?.w2?.[dayKey], yoy: au.yoy?.w2?.[dayKey] },
+      { lbl: `${meta.w0_label || 'W'} *`, now: auSrc.now?.w0?.[dayKey], yoy: auSrc.yoy?.w0?.[dayKey] },
+      { lbl: `${meta.w1_label || 'W+1'} *`, now: auSrc.now?.w1?.[dayKey], yoy: auSrc.yoy?.w1?.[dayKey] },
+      { lbl: `${meta.w2_label || 'W+2'} *`, now: auSrc.now?.w2?.[dayKey], yoy: auSrc.yoy?.w2?.[dayKey] },
     ].forEach(({ lbl, now: nv, yoy: yv }) => {
       tbody += `<tr style="color:#6b7280;font-style:italic">
         <td>${lbl}</td>
@@ -1220,12 +1222,17 @@ function drawChart(id, cfg, ds) {
     const nPts = ds.now.length;
     const toDisp = v => v != null ? parseFloat((v * 100).toFixed(3)) : null;
 
-    const advNowW0 = toDisp(au.now?.w0?.[dayKey]);
-    const advNowW1 = toDisp(au.now?.w1?.[dayKey]);
-    const advNowW2 = toDisp(au.now?.w2?.[dayKey]);
-    const advYoyW0 = toDisp(au.yoy?.w0?.[dayKey]);
-    const advYoyW1 = toDisp(au.yoy?.w1?.[dayKey]);
-    const advYoyW2 = toDisp(au.yoy?.w2?.[dayKey]);
+    // region 필터에 맞는 데이터 선택 (region2 우선, 없으면 팀전체 '__all__')
+    const auSrc = (au.by_region2 && region && au.by_region2[region])
+      ? au.by_region2[region]
+      : au;  // au.now/au.yoy = '__all__' 집계
+
+    const advNowW0 = toDisp(auSrc.now?.w0?.[dayKey]);
+    const advNowW1 = toDisp(auSrc.now?.w1?.[dayKey]);
+    const advNowW2 = toDisp(auSrc.now?.w2?.[dayKey]);
+    const advYoyW0 = toDisp(auSrc.yoy?.w0?.[dayKey]);
+    const advYoyW1 = toDisp(auSrc.yoy?.w1?.[dayKey]);
+    const advYoyW2 = toDisp(auSrc.yoy?.w2?.[dayKey]);
 
     if (advNowW0 != null || advNowW1 != null || advNowW2 != null) {
       const cw = meta.curr_week || '';

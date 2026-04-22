@@ -2327,7 +2327,7 @@ def query_advance_utilization(team_id='gyeonggi'):
 
     sql = f"""
     WITH base AS (
-      SELECT 'now' AS period,
+      SELECT 'now' AS period, z.region_2,
         CASE WHEN s.date BETWEEN '{w0_start}' AND '{w0_end}' THEN 'w0'
              WHEN s.date BETWEEN '{w1_start}' AND '{w1_end}' THEN 'w1'
              WHEN s.date BETWEEN '{w2_start}' AND '{w2_end}' THEN 'w2'
@@ -2340,7 +2340,7 @@ def query_advance_utilization(team_id='gyeonggi'):
         AND s.date BETWEEN '{w0_start}' AND '{w2_end}'
         AND z.region_1 IN ({r1_quoted})
       UNION ALL
-      SELECT 'yoy' AS period,
+      SELECT 'yoy' AS period, z.region_2,
         CASE WHEN s.date BETWEEN '{ly_w0_start}' AND '{ly_w0_end}' THEN 'w0'
              WHEN s.date BETWEEN '{ly_w1_start}' AND '{ly_w1_end}' THEN 'w1'
              WHEN s.date BETWEEN '{ly_w2_start}' AND '{ly_w2_end}' THEN 'w2'
@@ -2352,19 +2352,52 @@ def query_advance_utilization(team_id='gyeonggi'):
       WHERE s.snapshot_at >= '{snap_yoy}' AND s.snapshot_at < '{snap_yoy_next}'
         AND s.date BETWEEN '{ly_w0_start}' AND '{ly_w2_end}'
         AND z.region_1 IN ({r1_quoted})
+    ),
+    grouped AS (
+      -- region2별
+      SELECT period, region_2, wk, day_type,
+             SAFE_DIVIDE(SUM(op_min), SUM(dp_min)) AS util_rate
+      FROM base WHERE wk IS NOT NULL
+      GROUP BY period, region_2, wk, day_type
+      UNION ALL
+      -- 팀 전체 (region_2 = '__all__')
+      SELECT period, '__all__' AS region_2, wk, day_type,
+             SAFE_DIVIDE(SUM(op_min), SUM(dp_min)) AS util_rate
+      FROM base WHERE wk IS NOT NULL
+      GROUP BY period, wk, day_type
     )
-    SELECT period, wk, day_type, SAFE_DIVIDE(SUM(op_min), SUM(dp_min)) AS util_rate
-    FROM base
-    WHERE wk IS NOT NULL
-    GROUP BY period, wk, day_type
-    ORDER BY period, wk, day_type
+    SELECT * FROM grouped ORDER BY period, region_2, wk, day_type
     """
 
-    rows = run_bq(sql, max_rows=30)
+    rows = run_bq(sql, max_rows=2000)
     empty = lambda: {'weekday': None, 'weekend': None}
+    by_region2 = {}  # '__all__' 포함
+
+    for row in rows:
+        period   = row.get('period')
+        r2       = row.get('region_2') or '__all__'
+        wk       = row.get('wk')
+        day_type = row.get('day_type')
+        val      = row.get('util_rate')
+        if wk not in ('w0', 'w1', 'w2') or day_type not in ('weekday', 'weekend'):
+            continue
+        if r2 not in by_region2:
+            by_region2[r2] = {
+                'now': {'w0': empty(), 'w1': empty(), 'w2': empty()},
+                'yoy': {'w0': empty(), 'w1': empty(), 'w2': empty()},
+            }
+        if val is not None and period in ('now', 'yoy'):
+            try:
+                by_region2[r2][period][wk][day_type] = float(val)
+            except (ValueError, TypeError):
+                pass
+
+    total = by_region2.get('__all__', {'now': {'w0': empty(), 'w1': empty(), 'w2': empty()},
+                                        'yoy': {'w0': empty(), 'w1': empty(), 'w2': empty()}})
     result = {
-        'now': {'w0': empty(), 'w1': empty(), 'w2': empty()},
-        'yoy': {'w0': empty(), 'w1': empty(), 'w2': empty()},
+        'now': total['now'],
+        'yoy': total['yoy'],
+        'by_region2': by_region2,
         'meta': {
             'curr_week': curr_week,
             'curr_year': curr_year,
@@ -2375,16 +2408,6 @@ def query_advance_utilization(team_id='gyeonggi'):
             'ly_snap_date': snap_yoy,
         }
     }
-    for row in rows:
-        period   = row.get('period')
-        wk       = row.get('wk')
-        day_type = row.get('day_type')
-        val      = row.get('util_rate')
-        if period in result and wk in ('w0', 'w1', 'w2') and day_type in ('weekday', 'weekend') and val is not None:
-            try:
-                result[period][wk][day_type] = float(val)
-            except (ValueError, TypeError):
-                pass
     return result
 
 
@@ -3388,7 +3411,8 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         <button class="sidebar-btn" id="toggleChargedOnly"><span class="dot" style="background:#0d47a1"></span>충전보장형</button>
         <button class="sidebar-btn" id="toggleEvInfra"><span class="dot" style="background:#42a5f5"></span>충전 인프라</button>
         <div id="evInfraFilter" style="display:none;padding:4px 10px 8px 28px;">
-            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6270;cursor:pointer;padding:4px 0;"><input type="radio" name="evInfraType" value="everon" checked style="accent-color:#1565c0;width:14px;height:14px;"> 에버온 (일반)</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6270;cursor:pointer;padding:4px 0;"><input type="radio" name="evInfraType" value="all" checked style="accent-color:#42a5f5;width:14px;height:14px;"> 전체</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6270;cursor:pointer;padding:4px 0;"><input type="radio" name="evInfraType" value="everon" style="accent-color:#1565c0;width:14px;height:14px;"> 에버온 (일반)</label>
             <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6270;cursor:pointer;padding:4px 0;"><input type="radio" name="evInfraType" value="chargev" style="accent-color:#43a047;width:14px;height:14px;"> 차지비 (미니EV)</label>
         </div>
     </div>
@@ -4010,7 +4034,8 @@ function rebuildEvLayer() {{
     var filter = document.querySelector('input[name="evInfraType"]:checked');
     var mode = filter ? filter.value : 'everon';
     evAllMarkers.forEach(function(item) {{
-        if (mode === 'everon' && item.everon) evLayer.addLayer(item.marker);
+        if (mode === 'all') evLayer.addLayer(item.marker);
+        else if (mode === 'everon' && item.everon) evLayer.addLayer(item.marker);
         else if (mode === 'chargev' && item.chargev) evLayer.addLayer(item.marker);
     }});
 }}
