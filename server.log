@@ -19,3 +19,105 @@
 127.0.0.1 - - [22/Apr/2026 10:23:56] "POST /api/d2d-destinations HTTP/1.1" 200 -
 127.0.0.1 - - [22/Apr/2026 10:24:34] "POST /api/d2d-destinations HTTP/1.1" 200 -
 127.0.0.1 - - [22/Apr/2026 10:24:40] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:27:48] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:28:09] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:28:12] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:30:29] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:30:35] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:40:09] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:40:13] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:41:07] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:41:13] "POST /api/d2d-destinations HTTP/1.1" 200 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 51055)
+Traceback (most recent call last):
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 318, in _handle_request_noblock
+    self.process_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 349, in process_request
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dustin/carsharing_demand_map/server.py", line 50, in __init__
+    super().__init__(*args, directory=DIR, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 732, in __init__
+    super().__init__(*args, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 496, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 484, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "/Users/dustin/carsharing_demand_map/server.py", line 85, in do_GET
+    super().do_GET()
+    ~~~~~~~~~~~~~~^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 739, in do_GET
+    self.copyfile(f, self.wfile)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 942, in copyfile
+    shutil.copyfileobj(source, outputfile)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/shutil.py", line 257, in copyfileobj
+    fdst_write(buf)
+    ~~~~~~~~~~^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+127.0.0.1 - - [22/Apr/2026 10:43:54] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:43:58] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:15:16] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:15:16] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:18:27] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:18:27] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:18:40] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:39:14] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:40:19] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:42:14] "POST /api/simulate HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:43:02] "POST /api/simulate-eval HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:46:56] "POST /api/simulate HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 11:47:41] "POST /api/simulate-eval HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 12:47:16] "POST /api/dashboard-analyze HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 12:51:14] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 12:51:14] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 13:37:22] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 13:47:33] "POST /api/simulate HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 13:48:11] "POST /api/simulate-eval HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:16:22] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:16:22] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:17:53] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:17:59] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:20:14] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:20:17] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:20:35] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:20:42] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:22:05] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:23:05] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:23:08] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:23:23] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:23:26] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:23:51] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:23:54] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:31:23] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:31:43] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:32:01] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:32:05] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:32:34] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:32:34] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:34:30] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:34:33] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:35:11] "POST /api/dashboard-analyze HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:38:59] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:39:08] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:39:39] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:39:43] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:40:24] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 14:40:27] "POST /api/d2d-destinations HTTP/1.1" 200 -

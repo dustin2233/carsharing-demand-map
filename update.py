@@ -3121,7 +3121,11 @@ ZONE_JS = """
         }
 
         var evZid = z.ev_zone ? z.ev_zone.zone_id : 0;
-        var bottom = '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;,' + evZid + ')" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
+        var evZnm = z.ev_zone ? z.ev_zone.zone_name.replace(/"/g,'') : '';
+        var bottom = '<div class="popup-section" style="display:flex;gap:6px;">' +
+            '<button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;,' + evZid + ')" style="flex:1;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역</button>' +
+            '<button onclick="showTimeline(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;,' + (evZid || 'null') + ',' + (evZnm ? '&quot;' + evZnm + '&quot;' : 'null') + ')" style="flex:1;padding:8px;border:none;border-radius:8px;background:#5c6bc0;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">예약 현황</button>' +
+            '</div>';
 
         if (hasRightCol) {
             return '<div style="' + w + '"><div style="display:flex;gap:14px;">' + left + right + '</div>' + bottom + '</div>';
@@ -3884,7 +3888,7 @@ zonesData.forEach(function(z) {{
     var popupOpts = hasRightCol ? {{ maxWidth: 560 }} : {{ maxWidth: 300 }};
     var evZoneId = z.ev_zone ? z.ev_zone.zone_id : null;
     var evZoneName = z.ev_zone ? z.ev_zone.zone_name : null;
-    var m = L.marker([z.lat, z.lng], {{ icon: makeZoneIcon(z) }}).bindPopup(makePopup(z), popupOpts).on('click', (function(zid, zname, eid, ename) {{ return function() {{ showTimeline(zid, zname, eid, ename); }}; }})(z.zone_id, z.zone_name, evZoneId, evZoneName));
+    var m = L.marker([z.lat, z.lng], {{ icon: makeZoneIcon(z) }}).bindPopup(makePopup(z), popupOpts);
     m._zoneData = z;
     allZoneMarkers.push(m);
     zoneLayer.addLayer(m);

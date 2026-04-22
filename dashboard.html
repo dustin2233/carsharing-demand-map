@@ -2088,22 +2088,66 @@ function buildDataContext() {
     if (r1Lines.length) lines.push(`[경기/강원 구분]\n${r1Lines.join('\n')}`);
   }
 
-  // ── 시군구(region3)별 전체 실적 ──
-  // ── 사전가동률 (W+1, W+2) ──
+  // ── 시군구(region2)별 주간 실적 ──
+  if (D?.weekly_region2?.length) {
+    const r2nowMap = {}, r2yoyMap = {};
+    for (const row of D.weekly_region2) {
+      if (row.isoweek !== isoweek || row.isoyear !== isoyear) continue;
+      const key = row.region || '';
+      if (!key) continue;
+      if (row.period_type === 'now') r2nowMap[key] = row;
+      else if (row.period_type === 'yoy') r2yoyMap[key] = row;
+    }
+    const r2Lines = Object.entries(r2nowMap).map(([name, r]) => {
+      const y = r2yoyMap[name];
+      const rpc = r.rev_per_car ? Math.round(r.rev_per_car) : 0;
+      const yRpc = y?.rev_per_car ? Math.round(y.rev_per_car) : null;
+      return `  ${name}: 대당매출 ${fmt(rpc,'krw')}원${yRpc ? ` YoY${pct(rpc,yRpc)}` : ''}, ` +
+        `주중가동 ${r.opr_weekday!=null?(r.opr_weekday*100).toFixed(1)+'%':'-'}, ` +
+        `주말가동 ${r.opr_weekend!=null?(r.opr_weekend*100).toFixed(1)+'%':'-'}, ` +
+        `이용 ${fmt(r.use_count,'cnt')}건, 운영 ${fmt(r.car_count,'cnt')}대`;
+    });
+    if (r2Lines.length) lines.push(`[시군구(region2)별 주간 실적 — W${isoweek}]\n${r2Lines.join('\n')}`);
+  }
+
+  // ── 사전가동률 (W, W+1, W+2) ──
   if (D?.advance_util?.meta) {
     const au = D.advance_util;
     const meta = au.meta;
-    const fmtPct = v => v != null ? (v * 100).toFixed(1) + '%' : '-';
-    const fmtPp  = (now_v, yoy_v) => {
-      if (now_v == null || yoy_v == null) return '';
-      const d = (now_v - yoy_v) * 100;
+    const fmtPct = v => (v != null && !isNaN(v)) ? (v * 100).toFixed(1) + '%' : '-';
+    const fmtPp  = (nv, yv) => {
+      if (nv == null || yv == null || isNaN(nv) || isNaN(yv)) return '';
+      const d = (nv - yv) * 100;
       return ` YoY${d > 0 ? '+' : ''}${d.toFixed(1)}%p`;
     };
-    lines.push(
-      `[사전가동률 — ${meta.snap_date} 스냅샷 기준]\n` +
-      `  ${meta.w1_label} 가동률: ${fmtPct(au.now?.w1)}${fmtPp(au.now?.w1, au.yoy?.w1)}\n` +
-      `  ${meta.w2_label} 가동률: ${fmtPct(au.now?.w2)}${fmtPp(au.now?.w2, au.yoy?.w2)}`
-    );
+    const fmtWk = (nowWk, yoyWk) => {
+      const nwd = nowWk?.weekday, nwe = nowWk?.weekend;
+      const ywd = yoyWk?.weekday, ywe = yoyWk?.weekend;
+      return `주중 ${fmtPct(nwd)}${fmtPp(nwd, ywd)} / 주말 ${fmtPct(nwe)}${fmtPp(nwe, ywe)}`;
+    };
+
+    // 팀 전체
+    const totalLines = [
+      `[사전가동률 — ${meta.snap_date} 스냅샷 기준 (팀 전체)]`,
+      `  ${meta.w0_label}: ${fmtWk(au.now?.w0, au.yoy?.w0)}`,
+      `  ${meta.w1_label}: ${fmtWk(au.now?.w1, au.yoy?.w1)}`,
+      `  ${meta.w2_label}: ${fmtWk(au.now?.w2, au.yoy?.w2)}`,
+    ];
+
+    // 지역별 (by_region2)
+    const r2entries = Object.entries(au.by_region2 || {}).filter(([k]) => k !== '__all__');
+    if (r2entries.length) {
+      totalLines.push('[사전가동률 — 지역별]');
+      for (const [r2name, r2data] of r2entries) {
+        totalLines.push(
+          `  ${r2name}: ${meta.w0_label} ${fmtWk(r2data.now?.w0, r2data.yoy?.w0)} | ` +
+          `${meta.w1_label} ${fmtWk(r2data.now?.w1, r2data.yoy?.w1)} | ` +
+          `${meta.w2_label} ${fmtWk(r2data.now?.w2, r2data.yoy?.w2)}`
+        );
+      }
+    }
+
+    lines.push(totalLines.join('\n'));
   }
 
   if (D?.weekly_region3?.length) {
