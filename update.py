@@ -1102,6 +1102,35 @@ def query_gcar_zones(team_id='gyeonggi'):
     return run_bq(sql)
 
 
+# ── 전기차 충전 로밍 사업자 매칭 키워드 ──
+# 에버온: 미니EV 제외 전 차량 이용 가능
+EVERON_KEYWORDS = [
+    '에버온', '환경부', '기후에너지', '한국전력', 'GS차지비', '차지비', 'LG유플러스', '볼트업', '플러그인',
+    'SK일렉링크', 'TBU', '딜라이브', '레드이엔지', '매니지온', '스타코프', '신세계아이앤씨', '스파로스',
+    '씨어스', '이브이시스', '이지차저', '이카플러그', '제주에너지', '제주전기자동차', '차지인',
+    '채비', '클린일렉스', '타디스', '파워큐브', '파킹클라우드', '플러그링크',
+    '한국전기차충전', '한국전자금융', 'NICE인프라', '나이스차저', '현대엔지니어링',
+    '현대자동차', 'E-pit', '휴맥스', 'HUMAX', '한국전기차인프라', '이브이루씨', '서울씨엔지', '에바',
+]
+# 차지비: 미니EV 전용
+CHARGEV_KEYWORDS = [
+    'GS차지비', '차지비', '제주에너지', '환경부', '기후에너지', 'GS칼텍스', '대한송유관',
+    '매니지온', '씨어스', '타디스', '서울씨엔지', '한국전력', '레드이엔지', '이지차저',
+    '클린일렉스', '아이파킹', '이엘일렉트릭', '한국전기차인프라', '스타코프', '신세계아이앤씨',
+    '에버온', '파워큐브', '플러그링크', '한국전자금융', 'NICE인프라', '한화솔루션',
+    'LG유플러스', '볼트업', '플러그인', 'SK일렉링크', '이브이시스', '채비',
+    '한국전기차충전', '현대엔지니어링', '제주전기자동차', '휴맥스', 'HUMAX',
+]
+
+
+def _match_roaming(busi_nm, keywords):
+    """사업자명이 로밍 키워드에 매칭되는지 확인"""
+    for kw in keywords:
+        if kw in busi_nm:
+            return True
+    return False
+
+
 EV_CHARGER_API_KEY = '5145469085c4a37aebedd3f2859b7c4616180a6b57ce5a999e2afa96ed472e9a'
 EV_CHARGER_ZCODES = {
     'seoul': ['11'],          # 서울
@@ -1182,6 +1211,8 @@ def query_ev_chargers(team_id='gyeonggi'):
     result = list(stations.values())
     for s in result:
         s['total'] = s['fast'] + s['slow']
+        s['everon'] = _match_roaming(s['busiNm'], EVERON_KEYWORDS)
+        s['chargev'] = _match_roaming(s['busiNm'], CHARGEV_KEYWORDS)
     # 팀 관할 polygon 필터 (좌표 기준)
     team_poly = _get_team_polygon(team_id)
     if team_poly:
@@ -3356,6 +3387,10 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         <button class="sidebar-btn" id="toggleEvZones"><span class="dot" style="background:#1565c0"></span>EV 운영 존</button>
         <button class="sidebar-btn" id="toggleChargedOnly"><span class="dot" style="background:#0d47a1"></span>충전보장형</button>
         <button class="sidebar-btn" id="toggleEvInfra"><span class="dot" style="background:#42a5f5"></span>충전 인프라</button>
+        <div id="evInfraFilter" style="display:none;padding:4px 10px 8px 28px;">
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6270;cursor:pointer;padding:4px 0;"><input type="radio" name="evInfraType" value="everon" checked style="accent-color:#1565c0;width:14px;height:14px;"> 에버온 (일반)</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6270;cursor:pointer;padding:4px 0;"><input type="radio" name="evInfraType" value="chargev" style="accent-color:#43a047;width:14px;height:14px;"> 차지비 (미니EV)</label>
+        </div>
     </div>
     <div class="sidebar-section">
         <div class="sidebar-section-title">분석</div>
@@ -3943,30 +3978,43 @@ if (reentryRegionSelect) {{
 
 // 충전 인프라 레이어 (운영존 미매칭 충전소만 = 신규 EV존 후보)
 var evLayer = L.layerGroup();
-var zoneCoordSet = {{}};
-zonesData.forEach(function(z) {{ zoneCoordSet[z.lat.toFixed(3) + ',' + z.lng.toFixed(3)] = true; }});
+var evAllMarkers = [];
 evData.forEach(function(e) {{
-    // 운영 존과 100m 이내 충전소는 이미 존 팝업에 표시되므로 레이어에서 제외
     var nearZone = zonesData.some(function(z) {{
         var dlat = (z.lat - e.lat) * 111; var dlng = (z.lng - e.lng) * 111 * Math.cos(e.lat * Math.PI / 180);
         return Math.sqrt(dlat*dlat + dlng*dlng) <= 0.1;
     }});
     if (nearZone) return;
     if (e.total < 3) return;
+    if (!e.everon && !e.chargev) return;
     var label = (e.fast > 0 ? '급속' + e.fast : '') + (e.fast > 0 && e.slow > 0 ? '+' : '') + (e.slow > 0 ? '완속' + e.slow : '');
-    L.circleMarker([e.lat, e.lng], {{
+    var roamingTag = (e.everon && e.chargev) ? '에버온+차지비' : e.everon ? '에버온' : '차지비';
+    var m = L.circleMarker([e.lat, e.lng], {{
         radius: Math.max(5, Math.min(12, 4 + e.total)),
         fillColor: '#1565c0', color: '#0d47a1', weight: 1.5, opacity: 0.8, fillOpacity: 0.4
     }}).bindPopup(
         '<div class="popup-title">⚡ ' + e.statNm + '</div>' +
         '<div class="popup-row"><span class="popup-label">주소</span><span>' + e.addr + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">운영기관</span><span>' + e.busiNm + '</span></div>' +
+        '<div class="popup-row"><span class="popup-label">로밍</span><span style="font-weight:600;color:#1565c0">' + roamingTag + '</span></div>' +
         '<div class="popup-row"><span class="popup-label">충전기</span><span><b style="color:#1565c0">' + e.total + '기</b> (' + label + ')</span></div>' +
         '<div class="popup-row"><span class="popup-label">이용시간</span><span>' + (e.useTime || '정보없음') + '</span></div>' +
         (e.congestion ? evCongestionChart(e.congestion) : '') +
         '<div style="margin-top:6px;padding:4px 8px;background:#e3f2fd;border-radius:6px;font-size:10px;color:#0d47a1;font-weight:600;">쏘카 미운영 · EV존 개설 후보</div>'
-    ).addTo(evLayer);
+    );
+    evAllMarkers.push({{ marker: m, everon: e.everon, chargev: e.chargev }});
 }});
+
+function rebuildEvLayer() {{
+    evLayer.clearLayers();
+    var filter = document.querySelector('input[name="evInfraType"]:checked');
+    var mode = filter ? filter.value : 'everon';
+    evAllMarkers.forEach(function(item) {{
+        if (mode === 'everon' && item.everon) evLayer.addLayer(item.marker);
+        else if (mode === 'chargev' && item.chargev) evLayer.addLayer(item.marker);
+    }});
+}}
+rebuildEvLayer();
 
 // 그린카 존 레이어
 var gcarLayer = L.layerGroup();
@@ -4306,8 +4354,15 @@ document.getElementById('toggleChargedOnly').addEventListener('click', function(
 }});
 document.getElementById('toggleEvInfra').addEventListener('click', function() {{
     showEvInfra = !showEvInfra;
-    showEvInfra ? evLayer.addTo(map) : map.removeLayer(evLayer);
+    document.getElementById('evInfraFilter').style.display = showEvInfra ? 'block' : 'none';
+    if (showEvInfra) {{ rebuildEvLayer(); evLayer.addTo(map); }}
+    else {{ map.removeLayer(evLayer); }}
     styleBtn(this, showEvInfra);
+}});
+document.querySelectorAll('input[name="evInfraType"]').forEach(function(radio) {{
+    radio.addEventListener('change', function() {{
+        if (showEvInfra) {{ rebuildEvLayer(); evLayer.addTo(map); }}
+    }});
 }});
 
 document.getElementById('toggleMarketShare').addEventListener('click', function() {{

@@ -672,7 +672,7 @@ function fmt(v, f) {
   switch (f) {
     case 'krw':    return Math.round(v).toLocaleString('ko-KR');
     case 'pct':    return (v*100).toFixed(1) + '%';
-    case 'pct100': return (v*100).toFixed(1);
+    case 'pct100': return (v*100).toFixed(1) + '%';
     case 'cnt':    return Math.round(v).toLocaleString('ko-KR');
     case 'hr':     return v.toFixed(1);
     default:       return String(v);
@@ -855,6 +855,35 @@ function buildTable(cfg, ds, chartIdx) {
       ${tdChg(wow)}
       ${tdChg(yoyc)}
     </tr>`;
+  }
+
+  // 사전가동률 행 추가 (utilToggle 차트에만)
+  if (cfg.utilToggle && period !== 'monthly' && D?.advance_util?.meta) {
+    const au = D.advance_util;
+    const meta = au.meta || {};
+    const dayKey = key0 === 'opr_weekday' ? 'weekday' : 'weekend';
+    const fmtAdv = v => v != null ? (v * 100).toFixed(1) + '%' : '-';
+    const lastNowVal = nowData.at(-1)?.[key0] ?? null;
+
+    const tdPp = (nv, yv) => {
+      if (nv == null || yv == null) return `<td class="td-chg">-</td>`;
+      const pp = (nv - yv) * 100;
+      const cls = pp > 0 ? 'td-up' : pp < 0 ? 'td-dn' : '';
+      return `<td class="td-chg ${cls}">${pp > 0 ? '+' : ''}${pp.toFixed(1)}%p</td>`;
+    };
+    [
+      { lbl: `${meta.w0_label || 'W'} *`, now: au.now?.w0?.[dayKey], yoy: au.yoy?.w0?.[dayKey] },
+      { lbl: `${meta.w1_label || 'W+1'} *`, now: au.now?.w1?.[dayKey], yoy: au.yoy?.w1?.[dayKey] },
+      { lbl: `${meta.w2_label || 'W+2'} *`, now: au.now?.w2?.[dayKey], yoy: au.yoy?.w2?.[dayKey] },
+    ].forEach(({ lbl, now: nv, yoy: yv }) => {
+      tbody += `<tr style="color:#6b7280;font-style:italic">
+        <td>${lbl}</td>
+        <td>${fmtAdv(nv)}</td>
+        <td>${fmtAdv(yv)}</td>
+        <td>-</td>
+        ${tdPp(nv, yv)}
+      </tr>`;
+    });
   }
 
   return `<table class="data-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table>`;
@@ -1295,7 +1324,7 @@ function drawChart(id, cfg, ds) {
             label: ctx => {
               const v = ctx.raw;
               if (v == null) return `${ctx.dataset.label}: -`;
-              return `${ctx.dataset.label}: ${fmt(v, cfg.fmt)}`;
+              return `${ctx.dataset.label}: ${fmtAxis(v, cfg.fmt)}`;
             }
           }
         },
