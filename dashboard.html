@@ -1244,12 +1244,15 @@ function drawChart(id, cfg, ds) {
       // 기존 datasets 확장 (null 패딩 3개)
       datasets.forEach(d => { d.data = [...d.data, null, null, null]; });
 
-      // 마지막 실적 → W → W+1 → W+2 연결선 (현재연도 색, 점선)
+      const ADV_COLOR_NOW = '#f97316'; // 주황 — 사전가동(현재) 전용
+      const ADV_COLOR_YOY = '#fdba74'; // 연주황 — 사전가동(YoY) 전용
+
+      // 마지막 실적 → W → W+1 → W+2 연결선 (주황 점선)
       const lastNow = datasets[0]?.data[nPts - 1] ?? null;
       datasets.push({
         label: `사전가동 (${meta.curr_year || 2026})`,
         data: [...Array(nPts - 1).fill(null), lastNow, advNowW0, advNowW1, advNowW2],
-        borderColor: cfg.colors[0],
+        borderColor: ADV_COLOR_NOW,
         borderDash: [5, 4],
         backgroundColor: 'transparent',
         fill: false,
@@ -1261,19 +1264,19 @@ function drawChart(id, cfg, ds) {
         datalabels: {
           display: ctx => ctx.dataIndex >= nPts,
           anchor: 'top', align: 'top',
-          font: { size: 8, weight: 'bold' }, color: cfg.colors[0],
+          font: { size: 8, weight: 'bold' }, color: ADV_COLOR_NOW,
           formatter: v => v == null ? '' : fmtAxis(v, cfg.fmt),
           offset: 2,
         },
       });
 
-      // YoY 사전 (점선, 회색)
+      // YoY 사전 (연주황 점선)
       if (advYoyW0 != null || advYoyW1 != null || advYoyW2 != null) {
         const lastYoy = datasets[1]?.data[nPts - 1] ?? null;
         datasets.push({
           label: `사전가동 (${(meta.curr_year || 2026) - 1})`,
           data: [...Array(nPts - 1).fill(null), lastYoy, advYoyW0, advYoyW1, advYoyW2],
-          borderColor: '#94a3b8',
+          borderColor: ADV_COLOR_YOY,
           borderDash: [4, 3],
           backgroundColor: 'transparent',
           fill: false,

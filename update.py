@@ -2325,9 +2325,18 @@ def query_advance_utilization(team_id='gyeonggi'):
     regions = _expand_regions(TEAM_CONFIG[team_id]['regions'])
     r1_quoted = ', '.join(f"'{r}'" for r in regions)
 
+    # region1 별칭 역매핑: zone 테이블 실제값 → 대시보드 표시명
+    r1_norm_cases = '\n'.join(
+        f"        WHEN z.region_1 = '{alias}' THEN '{canonical}'"
+        for canonical, aliases in _REGION_ALIASES.items()
+        for alias in aliases
+        if alias != canonical
+    )
+    r1_norm_expr = f"CASE {r1_norm_cases}\n        ELSE z.region_1 END" if r1_norm_cases else "z.region_1"
+
     sql = f"""
     WITH base AS (
-      SELECT 'now' AS period, z.region_2,
+      SELECT 'now' AS period, ({r1_norm_expr}) AS region_1, z.region_2,
         CASE WHEN s.date BETWEEN '{w0_start}' AND '{w0_end}' THEN 'w0'
              WHEN s.date BETWEEN '{w1_start}' AND '{w1_end}' THEN 'w1'
              WHEN s.date BETWEEN '{w2_start}' AND '{w2_end}' THEN 'w2'
@@ -2340,7 +2349,7 @@ def query_advance_utilization(team_id='gyeonggi'):
         AND s.date BETWEEN '{w0_start}' AND '{w2_end}'
         AND z.region_1 IN ({r1_quoted})
       UNION ALL
-      SELECT 'yoy' AS period, z.region_2,
+      SELECT 'yoy' AS period, ({r1_norm_expr}) AS region_1, z.region_2,
         CASE WHEN s.date BETWEEN '{ly_w0_start}' AND '{ly_w0_end}' THEN 'w0'
              WHEN s.date BETWEEN '{ly_w1_start}' AND '{ly_w1_end}' THEN 'w1'
              WHEN s.date BETWEEN '{ly_w2_start}' AND '{ly_w2_end}' THEN 'w2'
@@ -2354,11 +2363,17 @@ def query_advance_utilization(team_id='gyeonggi'):
         AND z.region_1 IN ({r1_quoted})
     ),
     grouped AS (
-      -- region2별
+      -- region2별 (시/군/구)
       SELECT period, region_2, wk, day_type,
              SAFE_DIVIDE(SUM(op_min), SUM(dp_min)) AS util_rate
       FROM base WHERE wk IS NOT NULL
       GROUP BY period, region_2, wk, day_type
+      UNION ALL
+      -- region1별 (경기도/강원도 등) — region_2 컬럼에 region_1 값 저장
+      SELECT period, region_1 AS region_2, wk, day_type,
+             SAFE_DIVIDE(SUM(op_min), SUM(dp_min)) AS util_rate
+      FROM base WHERE wk IS NOT NULL
+      GROUP BY period, region_1, wk, day_type
       UNION ALL
       -- 팀 전체 (region_2 = '__all__')
       SELECT period, '__all__' AS region_2, wk, day_type,
@@ -3105,7 +3120,8 @@ ZONE_JS = """
             right += '</div>';
         }
 
-        var bottom = '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;)" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
+        var evZid = z.ev_zone ? z.ev_zone.zone_id : 0;
+        var bottom = '<div class="popup-section"><button onclick="showD2dDestinations(' + z.zone_id + ',&quot;' + z.zone_name.replace(/"/g,'') + '&quot;,' + evZid + ')" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">부름호출지역 확인</button></div>';
 
         if (hasRightCol) {
             return '<div style="' + w + '"><div style="display:flex;gap:14px;">' + left + right + '</div>' + bottom + '</div>';
@@ -5036,7 +5052,7 @@ function d2dRestoreLayers() {{
         if (p) p.style.opacity = '';
     }});
 }}
-function showD2dDestinations(zoneId, zoneName) {{
+function showD2dDestinations(zoneId, zoneName, evZoneId) {{
     d2dDestLayer.clearLayers();
     map.closePopup();
     var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('.ngrok-free.dev'));
@@ -5048,26 +5064,42 @@ function showD2dDestinations(zoneId, zoneName) {{
     loadDiv.textContent = '부름호출지역 조회 중...';
     document.body.appendChild(loadDiv);
 
-    fetch(apiBase + '/api/d2d-destinations', {{
-        method: 'POST',
-        headers: {{ 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' }},
-        body: JSON.stringify({{ zone_id: zoneId, team_id: TEAM_ID }})
-    }})
-    .then(function(r) {{ return r.json(); }})
-    .then(function(data) {{
+    // 원본존 + EV 가상존 동시 조회
+    var fetches = [
+        fetch(apiBase + '/api/d2d-destinations', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' }},
+            body: JSON.stringify({{ zone_id: zoneId, team_id: TEAM_ID }})
+        }}).then(function(r) {{ return r.json(); }})
+    ];
+    if (evZoneId && evZoneId > 0) {{
+        fetches.push(
+            fetch(apiBase + '/api/d2d-destinations', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' }},
+                body: JSON.stringify({{ zone_id: evZoneId, team_id: TEAM_ID }})
+            }}).then(function(r) {{ return r.json(); }})
+        );
+    }}
+
+    Promise.all(fetches)
+    .then(function(results) {{
         var ld = document.getElementById('d2dLoading');
         if (ld) ld.remove();
-        if (!data.destinations || data.destinations.length === 0) {{
+        var data = results[0];
+        var evData = results[1] || {{ destinations: [], total: 0 }};
+        var allEmpty = (!data.destinations || data.destinations.length === 0) && (!evData.destinations || evData.destinations.length === 0);
+        if (allEmpty) {{
             alert('부름 호출 데이터가 없습니다.');
             return;
         }}
 
-        // 기존 레이어 투명 처리
         d2dHideLayers();
-
-        // 별도 pane에 d2d 레이어 표시
         var bounds = [];
-        data.destinations.forEach(function(d) {{
+        var zone = zonesData.find(function(z) {{ return z.zone_id === zoneId; }});
+
+        // 원본존 부름 (보라색)
+        (data.destinations || []).forEach(function(d) {{
             var r = Math.min(25, Math.max(8, d.cnt * 3));
             var opacity = Math.min(0.85, 0.35 + d.cnt * 0.06);
             L.circleMarker([d.lat, d.lng], {{
@@ -5078,8 +5110,19 @@ function showD2dDestinations(zoneId, zoneName) {{
             bounds.push([d.lat, d.lng]);
         }});
 
+        // EV 가상존 부름 (초록색)
+        (evData.destinations || []).forEach(function(d) {{
+            var r = Math.min(25, Math.max(8, d.cnt * 3));
+            var opacity = Math.min(0.85, 0.35 + d.cnt * 0.06);
+            L.circleMarker([d.lat, d.lng], {{
+                radius: r, color: '#1565c0', fillColor: '#42a5f5',
+                fillOpacity: opacity, weight: 2.5, opacity: 0.9, pane: 'd2dPane'
+            }}).bindTooltip('<div style="font-weight:600;">' + d.address + '</div><div style="color:#1565c0;">⚡ EV ' + d.cnt + '건 · ' + d.way + '</div>', {{ direction: 'top', pane: 'd2dPane' }})
+            .addTo(d2dDestLayer);
+            bounds.push([d.lat, d.lng]);
+        }});
+
         // 존 위치 마커 + 연결선
-        var zone = zonesData.find(function(z) {{ return z.zone_id === zoneId; }});
         if (zone) {{
             bounds.push([zone.lat, zone.lng]);
             L.marker([zone.lat, zone.lng], {{
@@ -5090,9 +5133,16 @@ function showD2dDestinations(zoneId, zoneName) {{
                     html: '<div style="position:relative;left:-50%;bottom:30px;white-space:nowrap;"><div style="display:inline-block;background:#e53935;color:#fff;padding:5px 12px;border-radius:8px;font-size:11px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,0.2);">📍 ' + zoneName + ' (출발)</div><div style="width:2px;height:20px;background:#e53935;margin:0 auto;"></div></div>'
                 }})
             }}).addTo(d2dDestLayer);
-            data.destinations.slice(0, 15).forEach(function(d) {{
+            // 원본존 연결선 (보라)
+            (data.destinations || []).slice(0, 15).forEach(function(d) {{
                 L.polyline([[zone.lat, zone.lng], [d.lat, d.lng]], {{
                     color: '#6366f1', weight: 2.5, opacity: 0.5, dashArray: '6,4', pane: 'd2dPane'
+                }}).addTo(d2dDestLayer);
+            }});
+            // EV 연결선 (파란)
+            (evData.destinations || []).slice(0, 15).forEach(function(d) {{
+                L.polyline([[zone.lat, zone.lng], [d.lat, d.lng]], {{
+                    color: '#1565c0', weight: 2.5, opacity: 0.5, dashArray: '3,6', pane: 'd2dPane'
                 }}).addTo(d2dDestLayer);
             }});
         }}
@@ -5100,10 +5150,14 @@ function showD2dDestinations(zoneId, zoneName) {{
         if (bounds.length > 0) map.fitBounds(bounds, {{ padding: [40, 40] }});
 
         // 상단 배너
+        var totalCnt = (data.total || 0) + (evData.total || 0);
+        var evLabel = (evData.total > 0) ? ' + <span style="color:#1565c0;">⚡EV ' + evData.total + '건</span>' : '';
         var closeDiv = document.createElement('div');
         closeDiv.id = 'd2dBanner';
         closeDiv.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:#fff;border-radius:12px;padding:10px 20px;box-shadow:0 2px 12px rgba(0,0,0,0.12);display:flex;align-items:center;gap:12px;font-size:12px;';
-        closeDiv.innerHTML = '<span style="font-weight:700;color:#6366f1;">' + zoneName + '</span> 부름호출지역 <span style="color:#8b95a5;">(' + data.total + '건)</span><button id="d2dCloseBtn" style="margin-left:8px;padding:5px 14px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">닫기</button>';
+        closeDiv.innerHTML = '<span style="font-weight:700;color:#6366f1;">' + zoneName + '</span> 부름호출지역 <span style="color:#8b95a5;">(<span style="color:#6366f1;">' + (data.total||0) + '건</span>' + evLabel + ')</span>' +
+            (evData.total > 0 ? '<span style="display:flex;gap:8px;font-size:10px;color:#8b95a5;"><span><span style="display:inline-block;width:8px;height:8px;background:#818cf8;border-radius:50%;vertical-align:middle;margin-right:2px;"></span>일반</span><span><span style="display:inline-block;width:8px;height:8px;background:#42a5f5;border-radius:50%;vertical-align:middle;margin-right:2px;"></span>EV</span></span>' : '') +
+            '<button id="d2dCloseBtn" style="margin-left:8px;padding:5px 14px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">닫기</button>';
         document.body.appendChild(closeDiv);
         document.getElementById('d2dCloseBtn').addEventListener('click', function() {{
             d2dDestLayer.clearLayers();
@@ -5571,7 +5625,12 @@ def update_zone(team_id='gyeonggi'):
         advance_util = query_advance_utilization(team_id=team_id)
         _save_cache("advance_util", advance_util, team_id=team_id)
         now = advance_util.get('now', {})
-        print(f"       W+1={now.get('w1'):.1%} W+2={now.get('w2'):.1%}" if now.get('w1') else "       데이터 없음")
+        w1 = now.get('w1', {})
+        w2 = now.get('w2', {})
+        if w1:
+            print(f"       W+1 주중={w1.get('weekday', 0):.1%} W+2 주중={w2.get('weekday', 0):.1%}")
+        else:
+            print("       데이터 없음")
     except Exception as e:
         print(f"  [경고] 사전가동률 조회 실패: {e}")
 
