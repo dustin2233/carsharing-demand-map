@@ -8,3 +8,14 @@
 127.0.0.1 - - [22/Apr/2026 10:06:52] "GET /api/status HTTP/1.1" 200 -
 127.0.0.1 - - [22/Apr/2026 10:10:37] "GET /api/ai-config HTTP/1.1" 200 -
 127.0.0.1 - - [22/Apr/2026 10:10:37] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:13:19] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:13:37] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:13:42] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:14:43] "GET /api/dashboard?team_id=gyeonggi HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:14:47] "GET /api/ai-config HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:22:57] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:23:04] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:23:50] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:23:56] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:24:34] "POST /api/d2d-destinations HTTP/1.1" 200 -
+127.0.0.1 - - [22/Apr/2026 10:24:40] "POST /api/d2d-destinations HTTP/1.1" 200 -

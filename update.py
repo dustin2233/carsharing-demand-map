@@ -5098,26 +5098,24 @@ function showD2dDestinations(zoneId, zoneName, evZoneId) {{
         var bounds = [];
         var zone = zonesData.find(function(z) {{ return z.zone_id === zoneId; }});
 
-        // 원본존 부름 (보라색)
+        // 원본존 부름 (빨강)
         (data.destinations || []).forEach(function(d) {{
             var r = Math.min(25, Math.max(8, d.cnt * 3));
-            var opacity = Math.min(0.85, 0.35 + d.cnt * 0.06);
             L.circleMarker([d.lat, d.lng], {{
-                radius: r, color: '#4338ca', fillColor: '#818cf8',
-                fillOpacity: opacity, weight: 2.5, opacity: 0.9, pane: 'd2dPane'
-            }}).bindTooltip('<div style="font-weight:600;">' + d.address + '</div><div style="color:#6366f1;">' + d.cnt + '건 · ' + d.way + '</div>', {{ direction: 'top', pane: 'd2dPane' }})
+                radius: r, color: '#c62828', fillColor: '#ef5350',
+                fillOpacity: 0.6, weight: 2, opacity: 0.9, pane: 'd2dPane'
+            }}).bindTooltip('<div style="font-weight:600;">' + d.address + '</div><div style="color:#c62828;">' + d.cnt + '건 · ' + d.way + '</div>', {{ direction: 'top', pane: 'd2dPane' }})
             .addTo(d2dDestLayer);
             bounds.push([d.lat, d.lng]);
         }});
 
-        // EV 가상존 부름 (초록색)
+        // EV 가상존 부름 (파랑)
         (evData.destinations || []).forEach(function(d) {{
             var r = Math.min(25, Math.max(8, d.cnt * 3));
-            var opacity = Math.min(0.85, 0.35 + d.cnt * 0.06);
             L.circleMarker([d.lat, d.lng], {{
-                radius: r, color: '#1565c0', fillColor: '#42a5f5',
-                fillOpacity: opacity, weight: 2.5, opacity: 0.9, pane: 'd2dPane'
-            }}).bindTooltip('<div style="font-weight:600;">' + d.address + '</div><div style="color:#1565c0;">⚡ EV ' + d.cnt + '건 · ' + d.way + '</div>', {{ direction: 'top', pane: 'd2dPane' }})
+                radius: r, color: '#0d47a1', fillColor: '#42a5f5',
+                fillOpacity: 0.6, weight: 2, opacity: 0.9, pane: 'd2dPane'
+            }}).bindTooltip('<div style="font-weight:600;">' + d.address + '</div><div style="color:#0d47a1;">⚡ EV ' + d.cnt + '건 · ' + d.way + '</div>', {{ direction: 'top', pane: 'd2dPane' }})
             .addTo(d2dDestLayer);
             bounds.push([d.lat, d.lng]);
         }});
@@ -5136,13 +5134,13 @@ function showD2dDestinations(zoneId, zoneName, evZoneId) {{
             // 원본존 연결선 (보라)
             (data.destinations || []).slice(0, 15).forEach(function(d) {{
                 L.polyline([[zone.lat, zone.lng], [d.lat, d.lng]], {{
-                    color: '#6366f1', weight: 2.5, opacity: 0.5, dashArray: '6,4', pane: 'd2dPane'
+                    color: '#ef5350', weight: 2, opacity: 0.4, dashArray: '6,4', pane: 'd2dPane'
                 }}).addTo(d2dDestLayer);
             }});
-            // EV 연결선 (파란)
+            // EV 연결선 (파랑)
             (evData.destinations || []).slice(0, 15).forEach(function(d) {{
                 L.polyline([[zone.lat, zone.lng], [d.lat, d.lng]], {{
-                    color: '#1565c0', weight: 2.5, opacity: 0.5, dashArray: '3,6', pane: 'd2dPane'
+                    color: '#42a5f5', weight: 2, opacity: 0.4, dashArray: '3,6', pane: 'd2dPane'
                 }}).addTo(d2dDestLayer);
             }});
         }}
@@ -5156,7 +5154,7 @@ function showD2dDestinations(zoneId, zoneName, evZoneId) {{
         closeDiv.id = 'd2dBanner';
         closeDiv.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:#fff;border-radius:12px;padding:10px 20px;box-shadow:0 2px 12px rgba(0,0,0,0.12);display:flex;align-items:center;gap:12px;font-size:12px;';
         closeDiv.innerHTML = '<span style="font-weight:700;color:#6366f1;">' + zoneName + '</span> 부름호출지역 <span style="color:#8b95a5;">(<span style="color:#6366f1;">' + (data.total||0) + '건</span>' + evLabel + ')</span>' +
-            (evData.total > 0 ? '<span style="display:flex;gap:8px;font-size:10px;color:#8b95a5;"><span><span style="display:inline-block;width:8px;height:8px;background:#818cf8;border-radius:50%;vertical-align:middle;margin-right:2px;"></span>일반</span><span><span style="display:inline-block;width:8px;height:8px;background:#42a5f5;border-radius:50%;vertical-align:middle;margin-right:2px;"></span>EV</span></span>' : '') +
+            (evData.total > 0 ? '<span style="display:flex;gap:8px;font-size:10px;color:#8b95a5;"><span><span style="display:inline-block;width:8px;height:8px;background:#ef5350;border-radius:50%;vertical-align:middle;margin-right:2px;"></span>일반</span><span><span style="display:inline-block;width:8px;height:8px;background:#42a5f5;border-radius:50%;vertical-align:middle;margin-right:2px;"></span>EV</span></span>' : '') +
             '<button id="d2dCloseBtn" style="margin-left:8px;padding:5px 14px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">닫기</button>';
         document.body.appendChild(closeDiv);
         document.getElementById('d2dCloseBtn').addEventListener('click', function() {{

@@ -429,7 +429,7 @@ const METRICS = {
       { key:'revenue',      label:'주간 총매출',   fmt:'krw', unit:'원', ac:'#6366f1' },
       { key:'gpm',          label:'GPM',           fmt:'pct', unit:'',   ac:'#10b981' },
       { key:'opr_weekday',  label:'주중 가동률',   fmt:'pct', unit:'',   ac:'#3b82f6' },
-      { key:'opr_weekend',  label:'주말 가동률',   fmt:'pct', unit:'',   ac:'#f59e0b' },
+      { key:'opr_weekend',  label:'주말 가동률',   fmt:'pct', unit:'',   ac:'#14b8a6' },
       { key:'car_count',    label:'운영 대수',     fmt:'cnt', unit:'대', ac:'#64748b' },
       { key:'zone_count',   label:'운영 존',       fmt:'cnt', unit:'개', ac:'#94a3b8' },
     ],
@@ -1879,7 +1879,7 @@ function switchUtil(chartIdx, mode, btn) {
   btn.classList.add('active');
 
   const key   = mode === 'weekday' ? 'opr_weekday' : 'opr_weekend';
-  const color = mode === 'weekday' ? '#3b82f6'     : '#f59e0b';
+  const color = mode === 'weekday' ? '#3b82f6'     : '#14b8a6';
   const mg    = METRICS[metric];
   const cfg   = mg.charts[chartIdx];
   const patchedCfg = { ...cfg, keys: [key], colors: [color] };
