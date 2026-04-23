@@ -3552,7 +3552,6 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         <h3 id="timelineTitle">예약 현황</h3>
         <span id="timelineClose" style="cursor:pointer;font-size:16px;color:#8b95a5;background:#f4f5f7;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.2s;">&times;</span>
     </div>
-    <div style="font-size:11px;color:#8b95a5;margin-bottom:10px;font-weight:500;">차량별 예약 타임라인 (전후 1주)</div>
     <div id="timelineContent" style="overflow-x:auto;"></div>
 </div>
 

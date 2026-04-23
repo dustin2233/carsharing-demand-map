@@ -434,7 +434,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     'Authorization': f'Bearer {api_key}',
                 },
             )
-            with req_lib.urlopen(request, timeout=90) as resp:
+            with req_lib.urlopen(request, timeout=120) as resp:
                 result = json.loads(resp.read())
             msg = result['choices'][0]['message']
             text = msg.get('content')

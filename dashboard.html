@@ -2150,7 +2150,8 @@ function buildDataContext() {
     lines.push(totalLines.join('\n'));
   }
 
-  if (D?.weekly_region3?.length) {
+  // region3는 특정 시군구(region2) 선택 시에만 포함 (전체/도 단위 선택 시 토큰 절약)
+  if (D?.weekly_region3?.length && regionLevel === 2) {
     const nowMap = {}, yoyMap = {};
     for (const row of D.weekly_region3) {
       if (row.isoweek !== isoweek || row.isoyear !== isoyear) continue;
