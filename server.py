@@ -6,8 +6,11 @@
 """
 
 import http.server
+import hashlib
+import http.cookies
 import json
 import os
+import secrets
 import subprocess
 from datetime import datetime
 
@@ -16,6 +19,37 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 LAST_UPDATE_DEMAND = os.path.join(DIR, '.last_update_demand')
 LAST_UPDATE_ZONE = os.path.join(DIR, '.last_update_zone')
 API_CONFIG_PATH = os.path.join(DIR, '.api_config.json')
+
+# 인증
+AUTH_PASSWORD = 'socar3316!'
+AUTH_TOKEN = hashlib.sha256(AUTH_PASSWORD.encode()).hexdigest()[:32]
+AUTH_COOKIE_NAME = 'socar_auth'
+
+LOGIN_HTML = '''<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>로그인 — 쏘카 수요/인프라 지도</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#f4f5f7;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#fff;border-radius:16px;padding:40px;width:360px;box-shadow:0 4px 24px rgba(0,0,0,0.08);text-align:center}
+.card h1{font-size:20px;font-weight:800;color:#1a1a1a;margin-bottom:6px}
+.card p{font-size:13px;color:#8b95a5;margin-bottom:24px}
+.card input{width:100%;padding:12px 16px;border:1px solid #e8eaed;border-radius:10px;font-size:14px;margin-bottom:12px;transition:border 0.2s}
+.card input:focus{outline:none;border-color:#0064FF;box-shadow:0 0 0 3px rgba(0,100,255,0.1)}
+.card button{width:100%;padding:12px;border:none;border-radius:10px;background:#0064FF;color:#fff;font-size:14px;font-weight:700;cursor:pointer;transition:background 0.2s}
+.card button:hover{background:#0046b8}
+.error{color:#e53935;font-size:12px;margin-bottom:12px;display:none}
+</style></head><body>
+<div class="card">
+<h1>쏘카 수요/인프라 지도</h1>
+<p>접속하려면 비밀번호를 입력하세요</p>
+<div class="error" id="err">비밀번호가 올바르지 않습니다</div>
+<form method="POST" action="/auth/login">
+<input type="password" name="password" placeholder="비밀번호" autofocus>
+<button type="submit">로그인</button>
+</form>
+</div></body></html>'''
 
 
 def get_api_config():
@@ -49,7 +83,59 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIR, **kwargs)
 
+    def _is_authenticated(self):
+        cookie_header = self.headers.get('Cookie', '')
+        cookies = http.cookies.SimpleCookie(cookie_header)
+        token = cookies.get(AUTH_COOKIE_NAME)
+        return token and token.value == AUTH_TOKEN
+
+    def _send_login_page(self, error=False):
+        html = LOGIN_HTML
+        if error:
+            html = html.replace('display:none', 'display:block')
+        body = html.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _needs_auth(self):
+        """인증이 필요한 경로인지 확인 (API status는 제외)"""
+        # ngrok 유료 도메인(dustin.ngrok.app)은 실적 대시보드 → 인증 불필요
+        host = self.headers.get('Host', '')
+        if 'dustin.ngrok.app' in host:
+            return False
+        # localhost는 인증 불필요
+        if 'localhost' in host or '127.0.0.1' in host:
+            return False
+        return True
+
     def do_POST(self):
+        # 로그인 처리
+        if self.path == '/auth/login':
+            length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(length).decode('utf-8')
+            # URL-encoded form 파싱
+            params = {}
+            for pair in body.split('&'):
+                if '=' in pair:
+                    k, v = pair.split('=', 1)
+                    params[k] = v.replace('+', ' ').replace('%21', '!')
+            password = params.get('password', '')
+            if password == AUTH_PASSWORD:
+                self.send_response(302)
+                self.send_header('Set-Cookie', f'{AUTH_COOKIE_NAME}={AUTH_TOKEN}; Path=/; Max-Age=604800; SameSite=Lax')
+                self.send_header('Location', '/')
+                self.end_headers()
+            else:
+                self._send_login_page(error=True)
+            return
+
+        # API는 인증 체크 없이 통과 (fetch 호출에서 쿠키 자동 포함)
+        if not self.path.startswith('/api/') and self._needs_auth() and not self._is_authenticated():
+            self._send_login_page()
+            return
         if self.path == '/api/update-demand':
             self.handle_update_demand()
         elif self.path == '/api/update-zone':
@@ -70,6 +156,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
 
     def do_GET(self):
+        # API 엔드포인트는 인증 없이 통과
+        if not self.path.startswith('/api/') and self._needs_auth() and not self._is_authenticated():
+            self._send_login_page()
+            return
         if self.path == '/api/status':
             self.handle_status()
         elif self.path == '/api/ai-config':
