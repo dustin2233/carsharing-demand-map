@@ -4313,16 +4313,17 @@ function hidePanels() {{
     map.removeLayer(reentryLayer);
     styleBtn(document.getElementById('toggleGap'), false);
     styleBtn(document.getElementById('toggleReentry'), false);
-    styleBtn(document.getElementById('toggleAnalysis'), false);
+    // styleBtn(document.getElementById('toggleAnalysis'), false);  // 비활성화
     styleBtn(document.getElementById('toggleMarketShare'), false);
 }}
 
-document.getElementById('toggleAnalysis').addEventListener('click', function() {{
-    var wasOn = showAnalysis;
-    hidePanels();
-    if (!wasOn) {{ showAnalysis = true; document.getElementById('analysisPanel').style.display = 'block'; }}
-    styleBtn(this, showAnalysis);
-}});
+// toggleAnalysis 비활성화
+// document.getElementById('toggleAnalysis').addEventListener('click', function() {{
+//     var wasOn = showAnalysis;
+//     hidePanels();
+//     if (!wasOn) {{ showAnalysis = true; document.getElementById('analysisPanel').style.display = 'block'; }}
+//     styleBtn(this, showAnalysis);
+// }});
 
 document.getElementById('toggleGcar').addEventListener('click', function() {{
     showGcar = !showGcar;
@@ -4423,7 +4424,7 @@ styleBtn(document.getElementById('toggleDtod'), false);
 styleBtn(document.getElementById('toggleZones'), true);
 styleBtn(document.getElementById('toggleGap'), false);
 styleBtn(document.getElementById('toggleReentry'), false);
-styleBtn(document.getElementById('toggleAnalysis'), false);
+// styleBtn(document.getElementById('toggleAnalysis'), false);  // 비활성화
 styleBtn(document.getElementById('toggleGcar'), false);
 styleBtn(document.getElementById('toggleClosed'), false);
 styleBtn(document.getElementById('toggleEvZones'), false);
