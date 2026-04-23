@@ -42,7 +42,8 @@ body{font-family:'Pretendard',-apple-system,sans-serif;background:#f4f5f7;min-he
 .error{color:#e53935;font-size:12px;margin-bottom:12px;display:none}
 </style></head><body>
 <div class="card">
-<h1>쏘카 수요/인프라 지도</h1>
+<svg style="width:80px;margin-bottom:12px;" viewBox="0 0 120 32" fill="none" xmlns="http://www.w3.org/2000/svg"><text x="0" y="26" font-family="Pretendard,-apple-system,sans-serif" font-size="28" font-weight="900" fill="#0064FF" letter-spacing="-1">SOCAR</text></svg>
+<h1>경기강원 수요/인프라 지도</h1>
 <p>접속하려면 비밀번호를 입력하세요</p>
 <div class="error" id="err">비밀번호가 올바르지 않습니다</div>
 <form method="POST" action="/auth/login">
@@ -101,11 +102,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _needs_auth(self):
-        """인증이 필요한 경로인지 확인 (API status는 제외)"""
-        # ngrok 유료 도메인(dustin.ngrok.app)은 실적 대시보드 → 인증 불필요
+        """인증이 필요한 경로인지 확인"""
         host = self.headers.get('Host', '')
-        if 'dustin.ngrok.app' in host:
-            return False
         # localhost는 인증 불필요
         if 'localhost' in host or '127.0.0.1' in host:
             return False
@@ -125,7 +123,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             password = params.get('password', '')
             if password == AUTH_PASSWORD:
                 self.send_response(302)
-                self.send_header('Set-Cookie', f'{AUTH_COOKIE_NAME}={AUTH_TOKEN}; Path=/; Max-Age=604800; SameSite=Lax')
+                self.send_header('Set-Cookie', f'{AUTH_COOKIE_NAME}={AUTH_TOKEN}; Path=/; Max-Age=86400; SameSite=Lax')
                 self.send_header('Location', '/')
                 self.end_headers()
             else:
