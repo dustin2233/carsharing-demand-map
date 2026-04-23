@@ -176,3 +176,4 @@ Traceback (most recent call last):
     ~~~~~~~~~~~~~~~~~~^^^
 BrokenPipeError: [Errno 32] Broken pipe
 ----------------------------------------
+127.0.0.1 - - [23/Apr/2026 10:35:33] "GET /api/status HTTP/1.1" 200 -
