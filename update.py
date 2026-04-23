@@ -5038,23 +5038,32 @@ function showTimeline(zoneId, zoneName, evZoneId, evZoneName) {{
 map.createPane('d2dPane');
 map.getPane('d2dPane').style.zIndex = 650;
 var d2dDestLayer = L.layerGroup([], {{ pane: 'd2dPane' }}).addTo(map);
+var d2dShowZones = false;
 function d2dHideLayers() {{
     var pane = map.getPane('overlayPane');
-    if (pane) pane.style.opacity = '0';
+    if (pane) pane.style.opacity = '0.15';
     var marker = map.getPane('markerPane');
     if (marker) marker.style.opacity = '0';
     var shadow = map.getPane('shadowPane');
     if (shadow) shadow.style.opacity = '0';
-    var tooltip = map.getPane('tooltipPane');
-    if (tooltip) tooltip.style.opacity = '0';
-    var popup = map.getPane('popupPane');
-    if (popup) popup.style.opacity = '0';
+    // tooltipPane, popupPane 은 유지 (측정 도구용)
 }}
 function d2dRestoreLayers() {{
-    ['overlayPane','markerPane','shadowPane','tooltipPane','popupPane'].forEach(function(name) {{
+    ['overlayPane','markerPane','shadowPane'].forEach(function(name) {{
         var p = map.getPane(name);
         if (p) p.style.opacity = '';
     }});
+    d2dShowZones = false;
+}}
+function d2dToggleZones() {{
+    d2dShowZones = !d2dShowZones;
+    var marker = map.getPane('markerPane');
+    if (marker) marker.style.opacity = d2dShowZones ? '1' : '0';
+    var btn = document.getElementById('d2dZoneToggle');
+    if (btn) {{
+        btn.style.background = d2dShowZones ? '#0064FF' : '#f4f5f7';
+        btn.style.color = d2dShowZones ? '#fff' : '#5a6270';
+    }}
 }}
 function showD2dDestinations(zoneId, zoneName, evZoneId) {{
     d2dDestLayer.clearLayers();
@@ -5159,7 +5168,8 @@ function showD2dDestinations(zoneId, zoneName, evZoneId) {{
         closeDiv.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:#fff;border-radius:12px;padding:10px 20px;box-shadow:0 2px 12px rgba(0,0,0,0.12);display:flex;align-items:center;gap:12px;font-size:12px;';
         closeDiv.innerHTML = '<span style="font-weight:700;color:#6366f1;">' + zoneName + '</span> 부름호출지역 <span style="color:#8b95a5;">(<span style="color:#6366f1;">' + (data.total||0) + '건</span>' + evLabel + ')</span>' +
             (evData.total > 0 ? '<span style="display:flex;gap:8px;font-size:10px;color:#8b95a5;"><span><span style="display:inline-block;width:8px;height:8px;background:#ef5350;border-radius:50%;vertical-align:middle;margin-right:2px;"></span>일반</span><span><span style="display:inline-block;width:8px;height:8px;background:#42a5f5;border-radius:50%;vertical-align:middle;margin-right:2px;"></span>EV</span></span>' : '') +
-            '<button id="d2dCloseBtn" style="margin-left:8px;padding:5px 14px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">닫기</button>';
+            '<button id="d2dZoneToggle" onclick="d2dToggleZones()" style="padding:5px 14px;border:none;border-radius:8px;background:#f4f5f7;color:#5a6270;font-size:11px;font-weight:600;cursor:pointer;">운영 존 보기</button>' +
+            '<button id="d2dCloseBtn" style="padding:5px 14px;border:none;border-radius:8px;background:#0064FF;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">닫기</button>';
         document.body.appendChild(closeDiv);
         document.getElementById('d2dCloseBtn').addEventListener('click', function() {{
             d2dDestLayer.clearLayers();
