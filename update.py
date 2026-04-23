@@ -3440,7 +3440,7 @@ def generate_index(access_data, reservation_data, zones_data, gaps, analysis=Non
         <div class="sidebar-section-title">분석</div>
         <button class="sidebar-btn" id="toggleGap"><span class="dot" style="background:#8e44ad"></span>미진출 지역 분석</button>
         <button class="sidebar-btn" id="toggleReentry"><span class="dot" style="background:#ec407a"></span>재진입 추천구역</button>
-        <button class="sidebar-btn" id="toggleAnalysis"><span class="dot" style="background:#ef5350"></span>수요/공급 비교 분석</button>
+        <!-- <button class="sidebar-btn" id="toggleAnalysis"><span class="dot" style="background:#ef5350"></span>수요/공급 비교 분석</button> -->
         <button class="sidebar-btn" id="toggleMarketShare"><span class="dot" style="background:#ff7043"></span>Market Share</button>
     </div>
     <div class="sidebar-section">
