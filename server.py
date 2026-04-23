@@ -92,6 +92,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _send_login_page(self, error=False):
         html = LOGIN_HTML
+        host = self.headers.get('Host', '')
+        if 'dustin.ngrok.app' in host:
+            html = html.replace('경기강원 수요/인프라 지도', '경기강원 실적 대시보드')
         if error:
             html = html.replace('display:none', 'display:block')
         body = html.encode('utf-8')
