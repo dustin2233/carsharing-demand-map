@@ -94,7 +94,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         html = LOGIN_HTML
         host = self.headers.get('Host', '')
         if 'dustin.ngrok.app' in host:
-            html = html.replace('경기강원 수요/인프라 지도', '🐚 경기강원 실적 대시보드')
+            html = html.replace('경기강원 수요/인프라 지도', '<img src="/sora_avatar.png" style="width:64px;height:64px;border-radius:50%;margin-bottom:8px;"><br>경기강원 실적 대시보드')
         if error:
             html = html.replace('display:none', 'display:block')
         body = html.encode('utf-8')
